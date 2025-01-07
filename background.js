@@ -73,10 +73,19 @@ async function handleScreenshotCapture(prompt, tabId, port = null) {
     
     // Send the response to the content script for handling
     if (response.success) {
-      await chrome.tabs.sendMessage(tabId, {
-        type: "PERFORM_CLICK",
-        index: JSON.parse(response.response).index
-      });
+      const actionData = JSON.parse(response.response);
+      if (actionData.action === "click") {
+        await chrome.tabs.sendMessage(tabId, {
+          type: "PERFORM_CLICK",
+          index: actionData.index
+        });
+      } else if (actionData.action === "fill") {
+        await chrome.tabs.sendMessage(tabId, {
+          type: "PERFORM_FILL",
+          index: actionData.index,
+          value: actionData.value
+        });
+      }
     }
     
     return { success: true, response };
@@ -326,7 +335,8 @@ async function sendPromptAndScreenshotToServer(prompt, base64Screenshot) {
     system_prompt: `You are a precise browser automation agent that interacts with websites through structured commands. Your role is to:
 1. Analyze the provided webpage elements and structure
 2. Plan a sequence of actions to accomplish the given task
-3. Respond with valid JSON containing your action sequence and state assessment`
+3. Respond with valid JSON containing your action sequence and state assessment
+4. Support both click and fill actions for form interactions`
   });
 
   console.log('Using AI provider:', provider);
@@ -375,7 +385,9 @@ Based on these elements and the screenshot, determine which element should be cl
 Respond with a JSON object containing:
 {
   "index": "The index number of the element to click",
-  "description": "A clear description of the element and why it was chosen"
+  "description": "A clear description of the element and why it was chosen",
+  "action": "The type of action to perform (click or fill)",
+  "value": "The value to fill in the element (only required for fill action)"
 }
 
 Choose the most appropriate interactive element based on the user's request.`;
@@ -440,16 +452,25 @@ async function sendToOpenAI(prompt, base64Screenshot, apiKey, model, systemPromp
         schema: {
           type: "object",
           properties: {
+            action: {
+              type: "string",
+              enum: ["click", "fill"],
+              description: "The type of action to perform (click or fill)"
+            },
             index: {
               type: "number",
-              description: "The index number of the interactive element to click"
+              description: "The index number of the interactive element to interact with"
+            },
+            value: {
+              type: "string",
+              description: "The value to fill in the element (only required for fill action)"
             },
             description: {
               type: "string",
               description: "Clear description of the chosen element and why it was selected"
             }
           },
-          required: ["index", "description"],
+          required: ["action", "index", "description"],
           additionalProperties: false
         }
       }

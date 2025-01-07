@@ -518,6 +518,66 @@ function getInteractiveElementsList() {
   return list;
 }
 
+// Add fill handler function
+async function handleFill(selector, value) {
+  try {
+    if (!selector || !value) {
+      console.error('No selector or value provided');
+      return false;
+    }
+
+    const element = findElementBySelector(selector);
+    if (!element) {
+      console.warn(`Element not found with selector: ${selector}`);
+      return false;
+    }
+
+    // Get element center coordinates for visual feedback
+    const rect = element.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+
+    // Highlight the element
+    const originalOutline = element.style.outline;
+    element.style.outline = '2px solid blue';
+
+    // Animate cursor to target position
+    await animateCursorTo(x, y);
+    
+    // Show click indicator
+    showClickIndicator(x, y, '#3399FF');
+
+    // Focus the element
+    element.focus();
+
+    // Clear existing value if it's an input or textarea
+    if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
+      element.value = '';
+    }
+
+    // Type the value character by character
+    for (const char of value) {
+      element.value = element.value + char;
+      // Dispatch input event after each character
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      await new Promise(resolve => setTimeout(resolve, 50)); // Add slight delay between characters
+    }
+
+    // Dispatch change event after filling
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+    
+    // Remove highlight after a delay
+    setTimeout(() => {
+      element.style.outline = originalOutline;
+    }, 500);
+    
+    return true;
+  } catch (error) {
+    console.error('Error in fill handler:', error);
+    return false;
+  }
+}
+
 // Update the message listener
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   try {
@@ -544,6 +604,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         })
         .catch(error => {
           console.error('Error performing click:', error);
+          sendResponse({ success: false, error: error.message });
+        });
+    } else if (message.type === "PERFORM_FILL") {
+      const elementData = interactiveElementsMap.get(parseInt(message.index));
+      console.log('Attempting to fill element:', {
+        requestedIndex: message.index,
+        foundElement: elementData,
+        value: message.value
+      });
+      if (!elementData) {
+        sendResponse({ success: false, error: `No element found with index: ${message.index}` });
+        return true;
+      }
+      
+      handleFill(elementData.xpath, message.value)
+        .then(success => {
+          sendResponse({ success });
+        })
+        .catch(error => {
+          console.error('Error performing fill:', error);
           sendResponse({ success: false, error: error.message });
         });
     } else if (message.type === "GET_PAGE_MARKUP") {
