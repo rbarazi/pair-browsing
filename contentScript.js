@@ -392,7 +392,53 @@ function findElementBySelector(selector) {
   }
 }
 
-// Update the click handler to focus on selector-based interactions
+// Initialize cursor in the middle of the viewport when extension is activated
+function initializeCursor() {
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const x = viewportWidth / 2;
+  const y = viewportHeight / 2;
+  
+  updateCursor(x, y);
+}
+
+// Animate cursor movement to target position
+async function animateCursorTo(targetX, targetY, duration = 500) {
+  if (!cursorElement) {
+    initializeCursor();
+  }
+
+  const startRect = cursorElement.getBoundingClientRect();
+  const startX = startRect.left;
+  const startY = startRect.top;
+  const startTime = performance.now();
+
+  return new Promise(resolve => {
+    function animate(currentTime) {
+      const elapsed = currentTime - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      
+      // Easing function for smooth movement
+      const easeOutCubic = progress => 1 - Math.pow(1 - progress, 3);
+      const easeProgress = easeOutCubic(progress);
+      
+      const currentX = startX + (targetX - startX) * easeProgress;
+      const currentY = startY + (targetY - startY) * easeProgress;
+      
+      updateCursor(currentX, currentY);
+      
+      if (progress < 1) {
+        requestAnimationFrame(animate);
+      } else {
+        resolve();
+      }
+    }
+    
+    requestAnimationFrame(animate);
+  });
+}
+
+// Update the click handler to use cursor animation
 async function handleClick(selector) {
   try {
     if (!selector) {
@@ -406,20 +452,22 @@ async function handleClick(selector) {
       return false;
     }
 
-    // Get element center coordinates for visual feedback only
+    // Get element center coordinates for visual feedback
     const rect = element.getBoundingClientRect();
     const x = rect.left + rect.width / 2;
     const y = rect.top + rect.height / 2;
 
-    // Show visual feedback
-    showClickIndicator(x, y);
-    updateCursor(x, y);
-
-    // Highlight the element temporarily
+    // Highlight the element
     const originalOutline = element.style.outline;
     element.style.outline = '2px solid red';
+
+    // Animate cursor to target position
+    await animateCursorTo(x, y);
     
-    // Trigger events
+    // Show click animation
+    showClickIndicator(x, y);
+
+    // Trigger events after cursor reaches the target
     ['mousedown', 'mouseup', 'click'].forEach(eventType => {
       element.dispatchEvent(new MouseEvent(eventType, {
         view: window,
@@ -430,7 +478,7 @@ async function handleClick(selector) {
       }));
     });
     
-    // Remove highlight after a short delay
+    // Remove highlight after a delay
     setTimeout(() => {
       element.style.outline = originalOutline;
     }, 500);
@@ -473,7 +521,10 @@ function getInteractiveElementsList() {
 // Update the message listener
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   try {
-    if (message.type === "CLEANUP_MARKUP") {
+    if (message.type === "INIT_CURSOR") {
+      initializeCursor();
+      sendResponse({ success: true });
+    } else if (message.type === "CLEANUP_MARKUP") {
       cleanupExtensionMarkup();
       sendResponse({ success: true });
     } else if (message.type === "PERFORM_CLICK") {

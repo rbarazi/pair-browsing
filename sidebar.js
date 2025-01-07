@@ -54,10 +54,15 @@ async function ensureConnection() {
 }
 
 // Function to display a message in the chat
-function addMessage(text) {
+function addMessage(text, isUser = false) {
   const msgEl = document.createElement("div");
-  msgEl.style.margin = "5px 0";
-  msgEl.textContent = text;
+  msgEl.className = `message ${isUser ? 'user-message' : 'assistant-message'}`;
+  
+  const contentEl = document.createElement("div");
+  contentEl.className = "message-content";
+  contentEl.textContent = text;
+  
+  msgEl.appendChild(contentEl);
   messagesDiv.appendChild(msgEl);
   messagesDiv.scrollTop = messagesDiv.scrollHeight;
 }
@@ -83,16 +88,8 @@ function handlePortMessage(message) {
       // Parse the AI response
       const clickData = JSON.parse(message.serverResponse.response);
       displayAIResponse(clickData);
-
-      // Get the current tab and send click command
-      chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
-        if (tab) {
-          chrome.tabs.sendMessage(tab.id, {
-            type: "PERFORM_CLICK",
-            index: clickData.index
-          });
-        }
-      });
+      
+      // Remove the redundant click message - the background script already handles this
     } catch (error) {
       addMessage(`Error: ${error.message}`);
     }
@@ -104,7 +101,7 @@ sendBtn.addEventListener("click", async () => {
   const prompt = promptInput.value.trim();
   if (!prompt) return;
 
-  addMessage(`User: ${prompt}`);
+  addMessage(prompt, true);
 
   for (let attempt = 0; attempt < MAX_RECONNECT_ATTEMPTS; attempt++) {
     try {
@@ -169,6 +166,18 @@ function displayAIResponse(clickData) {
     addMessage(`Selected element index: ${clickData.index}`);
   }
 }
+
+// Add keyboard shortcut handling
+promptInput.addEventListener("keydown", async (e) => {
+  // Check for Command+Enter (Mac) or Control+Enter (Windows)
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+    e.preventDefault();
+    const prompt = promptInput.value.trim();
+    if (prompt) {
+      sendBtn.click();
+    }
+  }
+});
 
 // Initialize connection when the script loads
 connectToBackground();

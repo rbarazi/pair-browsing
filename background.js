@@ -98,6 +98,17 @@ chrome.runtime.onConnect.addListener((port) => {
       console.log(`Port disconnected: ${portId}`);
     });
 
+    // Initialize cursor when sidebar connects
+    chrome.tabs.query({ active: true, currentWindow: true }, async ([tab]) => {
+      if (tab) {
+        try {
+          await chrome.tabs.sendMessage(tab.id, { type: "INIT_CURSOR" });
+        } catch (error) {
+          console.warn('Failed to initialize cursor:', error);
+        }
+      }
+    });
+
     port.onMessage.addListener(async (message) => {
       console.log('Received message in background:', message);
       if (message.type === "CAPTURE_SCREENSHOT") {
@@ -142,6 +153,9 @@ chrome.action.onClicked.addListener(async (tab) => {
   try {
     // Open the side panel in the current tab
     await chrome.sidePanel.open({ tabId: tab.id });
+    
+    // Initialize the cursor in the content script
+    await chrome.tabs.sendMessage(tab.id, { type: "INIT_CURSOR" });
   } catch (error) {
     console.error('Failed to open side panel:', error);
   }
