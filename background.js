@@ -85,6 +85,40 @@ async function handleScreenshotCapture(prompt, tabId, port = null) {
           index: actionData.index,
           value: actionData.value
         });
+      } else if (actionData.action === "search_google") {
+        await chrome.tabs.sendMessage(tabId, {
+          type: "SEARCH_GOOGLE",
+          query: actionData.query
+        });
+      } else if (actionData.action === "go_to_url") {
+        await chrome.tabs.sendMessage(tabId, {
+          type: "GO_TO_URL",
+          url: actionData.url
+        });
+      } else if (actionData.action === "go_back") {
+        await chrome.tabs.sendMessage(tabId, {
+          type: "GO_BACK"
+        });
+      } else if (actionData.action === "scroll_down") {
+        await chrome.tabs.sendMessage(tabId, {
+          type: "SCROLL_DOWN",
+          amount: actionData.amount
+        });
+      } else if (actionData.action === "scroll_up") {
+        await chrome.tabs.sendMessage(tabId, {
+          type: "SCROLL_UP",
+          amount: actionData.amount
+        });
+      } else if (actionData.action === "send_keys") {
+        await chrome.tabs.sendMessage(tabId, {
+          type: "SEND_KEYS",
+          keys: actionData.keys
+        });
+      } else if (actionData.action === "extract_content") {
+        await chrome.tabs.sendMessage(tabId, {
+          type: "EXTRACT_CONTENT",
+          format: actionData.format
+        });
       }
     }
     
@@ -380,17 +414,30 @@ The page contains the following list of interactive elements, each with a unique
 ${JSON.stringify(interactiveElements, null, 2)}
 \`\`\`
 
-Based on these elements and the screenshot, determine which element should be clicked by providing its index.
+Based on these elements and the screenshot, determine the appropriate action to take. Available actions:
+
+1. Click: Click on an interactive element by index
+2. Fill: Input text into a form field by index
+3. Search Google: Search Google in the current tab
+4. Navigate: Go to URLs or go back in history
+5. Scroll: Scroll the page up or down
+6. Send Keys: Send keyboard inputs to the active element
+7. Extract Content: Get page content as text or markdown
 
 Respond with a JSON object containing:
 {
-  "index": "The index number of the element to click",
-  "description": "A clear description of the element and why it was chosen",
-  "action": "The type of action to perform (click or fill)",
-  "value": "The value to fill in the element (only required for fill action)"
+  "action": "The type of action to perform (click, fill, search_google, go_to_url, go_back, scroll_down, scroll_up, send_keys, extract_content)",
+  "index": "The index number of the element to interact with (for click and fill)",
+  "description": "A clear description of what will be done",
+  "value": "The value to fill (for fill action)",
+  "query": "The search query (for search_google action)",
+  "url": "The URL to navigate to (for go_to_url action)",
+  "amount": "The scroll amount in pixels (optional for scroll actions)",
+  "keys": "The keys to send (for send_keys action)",
+  "format": "The output format for extract_content (text or markdown)"
 }
 
-Choose the most appropriate interactive element based on the user's request.`;
+Choose the most appropriate action based on the user's request.`;
 
   console.log('Enhanced prompt built, sending to AI service');
   let response;
@@ -454,23 +501,44 @@ async function sendToOpenAI(prompt, base64Screenshot, apiKey, model, systemPromp
           properties: {
             action: {
               type: "string",
-              enum: ["click", "fill"],
-              description: "The type of action to perform (click or fill)"
+              enum: ["click", "fill", "search_google", "go_to_url", "go_back", "scroll_down", "scroll_up", "send_keys", "extract_content"],
+              description: "The type of action to perform"
             },
             index: {
               type: "number",
-              description: "The index number of the interactive element to interact with"
+              description: "The index number of the interactive element to interact with (required for click and fill actions)"
             },
             value: {
               type: "string",
-              description: "The value to fill in the element (only required for fill action)"
+              description: "The value to fill in the element (required for fill action)"
             },
             description: {
               type: "string",
-              description: "Clear description of the chosen element and why it was selected"
+              description: "Clear description of what will be done"
+            },
+            query: {
+              type: "string",
+              description: "The search query (required for search_google action)"
+            },
+            url: {
+              type: "string",
+              description: "The URL to navigate to (required for go_to_url action)"
+            },
+            amount: {
+              type: "number",
+              description: "The scroll amount in pixels (optional for scroll actions)"
+            },
+            keys: {
+              type: "string",
+              description: "The keys to send (required for send_keys action)"
+            },
+            format: {
+              type: "string",
+              enum: ["text", "markdown", "html"],
+              description: "The output format (required for extract_content action)"
             }
           },
-          required: ["action", "index", "description"],
+          required: ["action", "description"],
           additionalProperties: false
         }
       }

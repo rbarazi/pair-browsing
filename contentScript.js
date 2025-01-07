@@ -626,6 +626,77 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           console.error('Error performing fill:', error);
           sendResponse({ success: false, error: error.message });
         });
+    } else if (message.type === "SEARCH_GOOGLE") {
+      window.location.href = `https://www.google.com/search?q=${encodeURIComponent(message.query)}`;
+      sendResponse({ success: true });
+    } else if (message.type === "GO_TO_URL") {
+      window.location.href = message.url;
+      sendResponse({ success: true });
+    } else if (message.type === "GO_BACK") {
+      window.history.back();
+      sendResponse({ success: true });
+    } else if (message.type === "SCROLL_DOWN") {
+      if (message.amount) {
+        window.scrollBy(0, message.amount);
+      } else {
+        document.documentElement.scrollTop += window.innerHeight;
+      }
+      sendResponse({ success: true });
+    } else if (message.type === "SCROLL_UP") {
+      if (message.amount) {
+        window.scrollBy(0, -message.amount);
+      } else {
+        document.documentElement.scrollTop -= window.innerHeight;
+      }
+      sendResponse({ success: true });
+    } else if (message.type === "SEND_KEYS") {
+      try {
+        const activeElement = document.activeElement;
+        if (activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA')) {
+          // For special keys like Enter, Backspace, etc.
+          if (message.keys.includes('+') || message.keys.length > 1) {
+            const event = new KeyboardEvent('keydown', {
+              key: message.keys,
+              code: message.keys,
+              bubbles: true,
+              cancelable: true,
+              composed: true
+            });
+            activeElement.dispatchEvent(event);
+          } else {
+            // For regular text input
+            activeElement.value += message.keys;
+            activeElement.dispatchEvent(new Event('input', { bubbles: true }));
+            activeElement.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        }
+        sendResponse({ success: true });
+      } catch (error) {
+        console.error('Error sending keys:', error);
+        sendResponse({ success: false, error: error.message });
+      }
+    } else if (message.type === "EXTRACT_CONTENT") {
+      try {
+        let content;
+        if (message.format === 'text') {
+          content = document.body.innerText;
+        } else if (message.format === 'markdown') {
+          // Simple HTML to Markdown conversion
+          content = document.body.innerHTML
+            .replace(/<h[1-6]>(.*?)<\/h[1-6]>/g, '# $1\n')
+            .replace(/<p>(.*?)<\/p>/g, '$1\n')
+            .replace(/<a href="(.*?)">(.*?)<\/a>/g, '[$2]($1)')
+            .replace(/<strong>(.*?)<\/strong>/g, '**$1**')
+            .replace(/<em>(.*?)<\/em>/g, '*$1*')
+            .replace(/<.*?>/g, '');
+        } else {
+          content = document.body.innerHTML;
+        }
+        sendResponse({ success: true, content });
+      } catch (error) {
+        console.error('Error extracting content:', error);
+        sendResponse({ success: false, error: error.message });
+      }
     } else if (message.type === "GET_PAGE_MARKUP") {
       console.log('Starting page markup analysis...');
       
