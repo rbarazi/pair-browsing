@@ -19,6 +19,55 @@ function getElementByIndex(index) {
   return elementData ? findElementBySelector(elementData.xpath) : null;
 }
 
+// Helper function to check if element is the topmost at its position
+function isTopElement(el) {
+    const doc = el.ownerDocument;
+
+    // If we're in an iframe, elements are considered top by default
+    if (doc !== window.document) {
+        return true;
+    }
+
+    // For shadow DOM, check within its own root context
+    const shadowRoot = el.getRootNode();
+    if (shadowRoot instanceof ShadowRoot) {
+        const rect = el.getBoundingClientRect();
+        const point = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+
+        try {
+            const topEl = shadowRoot.elementFromPoint(point.x, point.y);
+            if (!topEl) return false;
+
+            let current = topEl;
+            while (current && current !== shadowRoot) {
+                if (current === el) return true;
+                current = current.parentElement;
+            }
+            return false;
+        } catch (e) {
+            return true;
+        }
+    }
+
+    // Regular DOM elements
+    const rect = el.getBoundingClientRect();
+    const point = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+
+    try {
+        const topEl = document.elementFromPoint(point.x, point.y);
+        if (!topEl) return false;
+
+        let current = topEl;
+        while (current && current !== document.documentElement) {
+            if (current === el) return true;
+            current = current.parentElement;
+        }
+        return false;
+    } catch (e) {
+        return true;
+    }
+}
+
 // Add the buildDomTree function
 /**
  * buildDomTree - Merged "Best of Both Worlds" Implementation
@@ -60,46 +109,62 @@ async function buildDomTree(rootElement, options = {}) {
    */
   function getXPathTree(node) {
     if (!node || node.nodeType !== Node.ELEMENT_NODE) {
-      return "";
+        return "";
     }
 
-    // If the element has its own ID, just return that
-    if (node.id) {
-      return `//*[@id="${node.id}"]`;
-    }
-
-    let path = "";
+    // Build path segments for each shadow root boundary
+    const pathSegments = [];
     let current = node;
 
     while (current && current.nodeType === Node.ELEMENT_NODE) {
-      // If this node has an ID, build a partial path from here down
-      if (current.id) {
-        return `//*[@id="${current.id}"]${path}`;
-      }
+        const root = current.getRootNode();
+        
+        // Build path segment up to the current root
+        let segment = "";
+        let segmentNode = current;
+        
+        while (segmentNode && segmentNode.nodeType === Node.ELEMENT_NODE && 
+               segmentNode !== root && 
+               !(root instanceof ShadowRoot && segmentNode === root.host)) {
+            let index = 0;
+            let sibling = segmentNode.previousSibling;
+            
+            while (sibling) {
+                if (sibling.nodeType === Node.ELEMENT_NODE && 
+                    sibling.nodeName === segmentNode.nodeName) {
+                    index++;
+                }
+                sibling = sibling.previousSibling;
+            }
 
-      // Find how many previous siblings share the same tagName
-      let index = 0;
-      let sibling = current.previousSibling;
-      while (sibling) {
-        if (
-          sibling.nodeType === Node.ELEMENT_NODE &&
-          sibling.nodeName === current.nodeName
-        ) {
-          index++;
+            const tagName = segmentNode.nodeName.toLowerCase();
+            // Only use // for custom elements that aren't at a shadow boundary
+            const separator = tagName.includes('-') && !(root instanceof ShadowRoot && segmentNode === current) ? '//' : '/';
+            const pathIndex = index ? `[${index + 1}]` : "";
+            segment = `${separator}${tagName}${pathIndex}${segment}`;
+            
+            segmentNode = segmentNode.parentNode;
         }
-        sibling = sibling.previousSibling;
-      }
 
-      // Build the path segment
-      const tagName = current.nodeName.toLowerCase();
-      const pathIndex = index ? `[${index + 1}]` : "";
-      path = `/${tagName}${pathIndex}${path}`;
+        if (segment) {
+            // Ensure segment starts with / if it's not a custom element path
+            if (!segment.startsWith('/') && !segment.startsWith('//')) {
+                segment = '/' + segment;
+            }
+            pathSegments.unshift(segment);
+        }
 
-      // Move up the DOM tree
-      current = current.parentNode;
+        // If we're in a shadow root, move to the host
+        if (root instanceof ShadowRoot) {
+            current = root.host;
+            pathSegments.unshift("::shadow");
+        } else {
+            current = current.parentNode;
+        }
     }
 
-    return path;
+    // Combine all segments and clean up the path
+    return cleanXPath(pathSegments.join(''));
   }
 
   /**
@@ -109,50 +174,94 @@ async function buildDomTree(rootElement, options = {}) {
    */
   function isInteractiveElement(element) {
     if (!element || element.nodeType !== Node.ELEMENT_NODE) return false;
+    
+    // Base interactive elements and roles
+    const interactiveElements = new Set([
+        'a', 'button', 'details', 'embed', 'input', 'label',
+        'menu', 'menuitem', 'object', 'select', 'textarea', 'summary'
+    ]);
+
+    const interactiveRoles = new Set([
+        'button', 'menu', 'menuitem', 'link', 'checkbox', 'radio',
+        'slider', 'tab', 'tabpanel', 'textbox', 'combobox', 'grid',
+        'listbox', 'option', 'progressbar', 'scrollbar', 'searchbox',
+        'switch', 'tree', 'treeitem', 'spinbutton', 'tooltip', 'a-button-inner', 
+        'a-dropdown-button', 'click', 'menuitemcheckbox', 'menuitemradio', 
+        'a-button-text', 'button-text', 'button-icon', 'button-icon-only', 
+        'button-text-icon-only', 'dropdown', 'combobox'
+    ]);
+
     const tagName = element.tagName.toLowerCase();
-    // Known interactive HTML tags
-    const interactiveTags = ["a", "button", "input", "select", "textarea"];
-    if (interactiveTags.includes(tagName)) return true;
+    const role = element.getAttribute('role');
+    const ariaRole = element.getAttribute('aria-role');
+    const tabIndex = element.getAttribute('tabindex');
 
-    // Inline event attributes
-    const eventAttributes = [
-      "onclick",
-      "onmousedown",
-      "onmouseup",
-      "onmouseover",
-      "onmouseout",
-      "onchange",
-      "onfocus",
-      "onblur",
-    ];
-    for (let attr of eventAttributes) {
-      if (element.hasAttribute(attr)) return true;
+    // Basic role/attribute checks
+    const hasInteractiveRole = interactiveElements.has(tagName) ||
+        interactiveRoles.has(role) ||
+        interactiveRoles.has(ariaRole) ||
+        (tabIndex !== null && tabIndex !== '-1') ||
+        element.getAttribute('data-action') === 'a-dropdown-select' ||
+        element.getAttribute('data-action') === 'a-dropdown-button';
+
+    if (hasInteractiveRole) return true;
+
+    // Check for event listeners
+    const hasClickHandler = element.onclick !== null ||
+        element.getAttribute('onclick') !== null ||
+        element.hasAttribute('ng-click') ||
+        element.hasAttribute('@click') ||
+        element.hasAttribute('v-on:click');
+
+    // Helper function to safely get event listeners
+    function getEventListeners(el) {
+        try {
+            return window.getEventListeners?.(el) || {};
+        } catch (e) {
+            const listeners = {};
+            const eventTypes = [
+                'click', 'mousedown', 'mouseup',
+                'touchstart', 'touchend',
+                'keydown', 'keyup', 'focus', 'blur'
+            ];
+
+            for (const type of eventTypes) {
+                const handler = el[`on${type}`];
+                if (handler) {
+                    listeners[type] = [{
+                        listener: handler,
+                        useCapture: false
+                    }];
+                }
+            }
+            return listeners;
+        }
     }
 
-    // ARIA roles
-    const role = element.getAttribute("role");
-    const interactiveRoles = [
-      "button",
-      "link",
-      "checkbox",
-      "radio",
-      "tab",
-      "menuitem",
-      "treeitem"
-    ];
-    if (role && interactiveRoles.includes(role.toLowerCase())) {
-      return true;
-    }
+    // Check for click-related events
+    const listeners = getEventListeners(element);
+    const hasClickListeners = listeners && (
+        listeners.click?.length > 0 ||
+        listeners.mousedown?.length > 0 ||
+        listeners.mouseup?.length > 0 ||
+        listeners.touchstart?.length > 0 ||
+        listeners.touchend?.length > 0
+    );
 
-    // Non-negative tabIndex
-    if (
-      element.hasAttribute("tabindex") &&
-      element.getAttribute("tabindex") !== "-1"
-    ) {
-      return true;
-    }
+    // Check for ARIA properties
+    const hasAriaProps = element.hasAttribute('aria-expanded') ||
+        element.hasAttribute('aria-pressed') ||
+        element.hasAttribute('aria-selected') ||
+        element.hasAttribute('aria-checked');
 
-    return false;
+    // Check if element is draggable
+    const isDraggable = element.draggable ||
+        element.getAttribute('draggable') === 'true';
+
+    return hasAriaProps ||
+        hasClickHandler ||
+        hasClickListeners ||
+        isDraggable;
   }
 
   /**
@@ -193,21 +302,18 @@ async function buildDomTree(rootElement, options = {}) {
    * isElementVisible - Checks CSS-based visibility (display, visibility, opacity) AND
    * ensures nonzero offsets, so we skip elements that are effectively hidden.
    */
-  function isElementVisible(el) {
-    if (!(el instanceof HTMLElement)) return false;
-    const style = window.getComputedStyle(el);
-    if (
-      style.display === "none" ||
-      style.visibility === "hidden" ||
-      parseFloat(style.opacity) === 0
-    ) {
-      return false;
-    }
+  function isElementVisible(element) {
+    if (!(element instanceof HTMLElement)) return false;
+    
+    const style = window.getComputedStyle(element);
+    const isStyleVisible = style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        parseFloat(style.opacity) > 0 &&
+        element.offsetWidth > 0 &&
+        element.offsetHeight > 0;
 
-    // Check the offset dimension for real size
-    if (el.offsetWidth === 0 && el.offsetHeight === 0) {
-      return false;
-    }
+    if (!isStyleVisible) return false;
+
     return true;
   }
 
@@ -245,64 +351,116 @@ async function buildDomTree(rootElement, options = {}) {
   //  2. RECURSIVE TRAVERSAL FUNCTION
   // --------------------------------------------------------------------------
 
-  async function traverse(node) {
+  async function traverse(node, parentIframe = null) {
     if (!node) return null;
+
+    // Handle text nodes
+    if (node.nodeType === Node.TEXT_NODE) {
+        const textContent = node.textContent.trim();
+        if (textContent && isTextNodeVisible(node)) {
+            return {
+                type: "TEXT_NODE",
+                text: textContent,
+                isVisible: true,
+            };
+        }
+        return null;
+    }
 
     // ELEMENT_NODE
     if (node.nodeType === Node.ELEMENT_NODE) {
-      const el = node;
+        const el = node;
 
-      // Filter out some tags
-      const ignoredTags = ["script", "style", "link", "meta", "svg"];
-      if (ignoredTags.includes(el.tagName.toLowerCase())) {
-        return null;
-      }
+        // Filter out some tags
+        const ignoredTags = ["script", "style", "link", "meta", "svg"];
+        if (ignoredTags.includes(el.tagName.toLowerCase())) {
+            return null;
+        }
 
-      // Check if element is interactive and visible
-      const isVisible = isElementVisible(el);
-      const isInteractive = isInteractiveElement(el);
+        // Check element properties
+        const isVisible = isElementVisible(el);
+        const isInteractive = isInteractiveElement(el);
+        const isTop = isTopElement(el); // Separate check for top element
 
-      // If element is both interactive and visible, add it to our map
-      if (isInteractive && isVisible) {
-        const elementData = {
-          index: currentHighlightIndex,
-          tagName: el.tagName.toLowerCase(),
-          xpath: getXPathTree(el),
-          text: el.textContent?.trim().substring(0, 100) || '',
-          attributes: {}
+        // Create node data with proper XPath
+        const nodeData = {
+            tagName: el.tagName.toLowerCase(),
+            xpath: getXPathTree(el),
+            text: el.textContent?.trim().substring(0, 100) || '',
+            attributes: {},
+            isCustomElement: el.tagName.includes('-'),
+            hasShadowRoot: !!el.shadowRoot,
+            isInteractive,
+            isVisible,
+            isTopElement: isTop
         };
 
-        // Gather identifying attributes
-        for (const attr of el.attributes) {
-          if (['id', 'class', 'name', 'title', 'aria-label', 'role', 'type'].includes(attr.name)) {
-            elementData.attributes[attr.name] = attr.value;
-          }
+        // Gather all attributes
+        const attributeNames = el.getAttributeNames?.() || [];
+        for (const name of attributeNames) {
+            nodeData.attributes[name] = el.getAttribute(name);
         }
 
-        // Store in map
-        interactiveElementsMap.set(currentHighlightIndex, elementData);
+        // If element is interactive, visible, and topmost, add to map
+        if (isInteractive && isVisible && isTop) {
+            interactiveElementsMap.set(currentHighlightIndex, nodeData);
+            
+            if (doHighlightElements) {
+                highlightElement(el, currentHighlightIndex, parentIframe);
+            }
+
+            currentHighlightIndex++;
+        }
+
+        // Process children
+        const children = [];
         
-        // Optional highlighting for debugging
-        if (doHighlightElements) {
-          highlightElement(el, `${currentHighlightIndex}: <${elementData.tagName}>`);
+        // Process regular children
+        for (const child of el.childNodes) {
+            const childData = await traverse(child, parentIframe);
+            if (childData) {
+                children.push(childData);
+            }
         }
 
-        currentHighlightIndex++;
-      }
-
-      // Recurse into children
-      const children = [];
-      for (const child of el.childNodes) {
-        const childData = await traverse(child);
-        if (childData) {
-          children.push(childData);
+        // Process shadow DOM
+        if (el.shadowRoot && includeShadowRoots) {
+            const shadowChildren = [];
+            for (const shadowChild of el.shadowRoot.childNodes) {
+                const shadowChildData = await traverse(shadowChild, parentIframe);
+                if (shadowChildData) {
+                    shadowChildren.push(shadowChildData);
+                }
+            }
+            if (shadowChildren.length > 0) {
+                children.push({
+                    type: 'shadowRoot',
+                    children: shadowChildren
+                });
+            }
         }
-      }
 
-      return children.length > 0 ? { children } : null;
+        nodeData.children = children;
+        return nodeData;
     }
 
     return null;
+  }
+
+  // Helper function to check if text node is visible
+  function isTextNodeVisible(textNode) {
+    const range = document.createRange();
+    range.selectNodeContents(textNode);
+    const rect = range.getBoundingClientRect();
+
+    return rect.width !== 0 &&
+        rect.height !== 0 &&
+        rect.top >= 0 &&
+        rect.top <= window.innerHeight &&
+        textNode.parentElement?.checkVisibility({
+            checkOpacity: true,
+            checkVisibilityCSS: true
+        });
   }
 
   // --------------------------------------------------------------------------
@@ -376,20 +534,118 @@ function isXPath(selector) {
 
 // Function to find element by either XPath or CSS selector
 function findElementBySelector(selector) {
-  if (isXPath(selector)) {
-    // Use XPath
-    const result = document.evaluate(
-      selector,
-      document,
-      null,
-      XPathResult.FIRST_ORDERED_NODE_TYPE,
-      null
-    );
-    return result.singleNodeValue;
-  } else {
-    // Use CSS selector
-    return document.querySelector(selector);
-  }
+    if (isXPath(selector)) {
+        // Handle Shadow DOM in XPath
+        if (selector.includes('::shadow')) {
+            const parts = selector.split('::shadow');
+            let currentElement = document;
+            
+            for (let i = 0; i < parts.length; i++) {
+                let part = parts[i].trim();
+                if (!part) continue;
+
+                try {
+                    if (currentElement instanceof DocumentFragment) {
+                        // For shadow roots, we need to traverse manually
+                        const pathParts = part.split('/').filter(p => p);
+                        let context = currentElement;
+
+                        for (const pathPart of pathParts) {
+                            if (!context) break;
+
+                            // For custom elements (containing hyphen), use deep query
+                            if (pathPart.includes('-')) {
+                                const elements = Array.from(context.querySelectorAll(pathPart));
+                                context = elements[0] || null;
+                                continue;
+                            }
+
+                            // Handle element with index (e.g., div[2])
+                            const [tagName, indexStr] = pathPart.split('[');
+                            const index = indexStr ? parseInt(indexStr.replace(']', '')) - 1 : 0;
+
+                            // First try direct children
+                            let elements = Array.from(context.children).filter(el => 
+                                el.tagName.toLowerCase() === tagName.toLowerCase()
+                            );
+
+                            // If not found in direct children, try deeper
+                            if (!elements.length) {
+                                elements = Array.from(context.getElementsByTagName(tagName));
+                            }
+
+                            context = elements[index] || null;
+
+                            if (!context) {
+                                console.warn(`Could not find element ${tagName} at index ${index} in`, context);
+                                break;
+                            }
+                        }
+                        currentElement = context;
+                    } else {
+                        // For regular DOM, use document.evaluate
+                        if (!part.startsWith('/')) {
+                            part = '/' + part;
+                        }
+                        const result = document.evaluate(
+                            part,
+                            currentElement,
+                            null,
+                            XPathResult.FIRST_ORDERED_NODE_TYPE,
+                            null
+                        );
+                        currentElement = result.singleNodeValue;
+                    }
+
+                    if (!currentElement) {
+                        console.warn(`Could not find element for part: ${part} in context:`, currentElement);
+                        return null;
+                    }
+                    
+                    // If there are more parts to process
+                    if (i < parts.length - 1) {
+                        // The current element should be a shadow host
+                        if (!currentElement.shadowRoot) {
+                            console.warn(`No shadow root found on element:`, currentElement);
+                            return null;
+                        }
+                        currentElement = currentElement.shadowRoot;
+                    }
+                } catch (e) {
+                    console.error(`Error evaluating part: ${part}`, e);
+                    console.error(e);
+                    return null;
+                }
+            }
+            return currentElement;
+        } else {
+            // Regular XPath without shadow DOM
+            try {
+                const result = document.evaluate(
+                    selector,
+                    document,
+                    null,
+                    XPathResult.FIRST_ORDERED_NODE_TYPE,
+                    null
+                );
+                return result.singleNodeValue;
+            } catch (e) {
+                console.error(`Error evaluating XPath: ${selector}`, e);
+                return null;
+            }
+        }
+    } else {
+        // Use CSS selector
+        return document.querySelector(selector);
+    }
+}
+
+// Helper function to clean up XPath
+function cleanXPath(xpath) {
+    // Remove duplicate path segments
+    return xpath.replace(/\/html\/html\/body\/html\/body/, '/html/body')
+               .replace(/\/\//g, '//')  // Keep custom element separators
+               .replace(/([^/])\/(\/[^/])/g, '$1$2'); // Remove duplicate single slashes
 }
 
 // Initialize cursor in the middle of the viewport when extension is activated
