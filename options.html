@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Extension Options</title>
+  <style>
+    body {
+      padding: 20px;
+      font-family: Arial, sans-serif;
+    }
+    .container {
+      max-width: 500px;
+      margin: 0 auto;
+    }
+    .form-group {
+      margin-bottom: 15px;
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+    }
+    input[type="text"], textarea, select {
+      width: 100%;
+      padding: 8px;
+      margin-bottom: 10px;
+    }
+    textarea {
+      height: 100px;
+      resize: vertical;
+    }
+    .provider-section {
+      margin-bottom: 20px;
+      padding: 15px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+    .provider-section h3 {
+      margin-top: 0;
+      margin-bottom: 15px;
+    }
+    button {
+      background-color: #4CAF50;
+      color: white;
+      padding: 10px 15px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #45a049;
+    }
+    #status {
+      margin-top: 10px;
+      padding: 10px;
+      display: none;
+    }
+    .success {
+      background-color: #dff0d8;
+      color: #3c763d;
+    }
+    .error {
+      background-color: #f2dede;
+      color: #a94442;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Extension Options</h2>
+    
+    <div class="form-group">
+      <label for="provider">AI Provider:</label>
+      <select id="provider">
+        <option value="openai">OpenAI</option>
+        <option value="gemini">Google Gemini</option>
+      </select>
+    </div>
+
+    <div id="openai-section" class="provider-section">
+      <h3>OpenAI Settings</h3>
+      <div class="form-group">
+        <label for="openaiKey">OpenAI API Key:</label>
+        <input type="text" id="openaiKey" placeholder="Enter your OpenAI API key">
+      </div>
+      <div class="form-group">
+        <label for="openaiModel">Model Name:</label>
+        <input type="text" id="openaiModel" placeholder="Enter model name (e.g., gpt-4o-mini)">
+      </div>
+    </div>
+
+    <div id="gemini-section" class="provider-section">
+      <h3>Google Gemini Settings</h3>
+      <div class="form-group">
+        <label for="geminiKey">Gemini API Key:</label>
+        <input type="text" id="geminiKey" placeholder="Enter your Gemini API key">
+      </div>
+      <div class="form-group">
+        <label for="geminiModel">Model Name:</label>
+        <input type="text" id="geminiModel" placeholder="Enter model name (e.g., gemini-2.0-flash-exp)">
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="systemPrompt">System Prompt:</label>
+      <textarea id="systemPrompt" placeholder="Enter system prompt"></textarea>
+    </div>
+
+    <div class="form-group">
+      <label>
+        <input type="checkbox" id="debugMode">
+        Debug Mode (Show captured screenshots in chat)
+      </label>
+    </div>
+
+    <button id="save">Save</button>
+    <div id="status"></div>
+  </div>
+  <script src="options.js"></script>
+</body>
+</html> 

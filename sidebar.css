@@ -1,0 +1,30 @@
+/* sidebar.css */
+
+#chat-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  font-family: sans-serif;
+}
+
+#messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  border-bottom: 1px solid #ccc;
+}
+
+#input-area {
+  display: flex;
+  padding: 10px;
+  background-color: #f0f0f0;
+}
+
+#prompt {
+  flex: 1;
+  padding: 5px;
+}
+
+#sendBtn {
+  margin-left: 5px;
+}
