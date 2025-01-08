@@ -13,6 +13,16 @@ async function setOpenAIKey(apiKey) {
 // Store active connections
 const ports = new Map();
 
+// Helper function to send messages to sidebar
+function sendSidebarMessage(port, message) {
+  if (port) {
+    port.postMessage({
+      type: "ASSISTANT_MESSAGE",
+      message
+    });
+  }
+}
+
 // Function to clean up extension markup before screenshot
 async function cleanupExtensionMarkup(tabId) {
   try {
@@ -74,7 +84,7 @@ async function waitForPageLoad(tabId) {
 }
 
 // Function to handle screenshot capture
-async function handleScreenshotCapture(prompt, tabId, port = null) {
+async function handleScreenshotCapture(prompt, tabId, port = null, previousSteps = []) {
   try {
     // Get the window ID for the tab
     const tab = await chrome.tabs.get(tabId);
@@ -115,7 +125,7 @@ async function handleScreenshotCapture(prompt, tabId, port = null) {
     }
     
     // Send to AI service
-    const response = await sendPromptAndScreenshotToServer(prompt, screenshotUrl);
+    const response = await sendPromptAndScreenshotToServer(prompt, screenshotUrl, previousSteps);
     console.log('AI service response received:', {
       success: response.success,
       response: response.response,
@@ -133,54 +143,71 @@ async function handleScreenshotCapture(prompt, tabId, port = null) {
         next_prompt: actionData.next_prompt
       });
       
+      // Send initial action description to sidebar
+      sendSidebarMessage(port, `Executing: ${actionData.description}`);
+      
       // Handle the current action
       if (actionData.action === "click") {
+        sendSidebarMessage(port, `Clicking element at index ${actionData.index}`);
         await chrome.tabs.sendMessage(tabId, {
           type: "PERFORM_CLICK",
           index: actionData.index
         });
       } else if (actionData.action === "fill") {
+        sendSidebarMessage(port, `Filling form field at index ${actionData.index}`);
         await chrome.tabs.sendMessage(tabId, {
           type: "PERFORM_FILL",
           index: actionData.index,
           value: actionData.value
         });
       } else if (actionData.action === "fill_and_submit") {
+        sendSidebarMessage(port, `Filling form field at index ${actionData.index} and submitting`);
+        await chrome.tabs.sendMessage(tabId, {
+          type: "PERFORM_CLICK",
+          index: actionData.index,
+        });
         await chrome.tabs.sendMessage(tabId, {
           type: "PERFORM_FILL_AND_SUBMIT",
           index: actionData.index,
           value: actionData.value
         });
       } else if (actionData.action === "search_google") {
+        sendSidebarMessage(port, `Searching Google for query: ${actionData.query}`);
         await chrome.tabs.sendMessage(tabId, {
           type: "SEARCH_GOOGLE",
           query: actionData.query
         });
       } else if (actionData.action === "go_to_url") {
+        sendSidebarMessage(port, `Navigating to URL: ${actionData.url}`);
         await chrome.tabs.sendMessage(tabId, {
           type: "GO_TO_URL",
           url: actionData.url
         });
       } else if (actionData.action === "go_back") {
+        sendSidebarMessage(port, `Going back in history`);
         await chrome.tabs.sendMessage(tabId, {
           type: "GO_BACK"
         });
       } else if (actionData.action === "scroll_down") {
+        sendSidebarMessage(port, `Scrolling down ${actionData.amount} pixels`);
         await chrome.tabs.sendMessage(tabId, {
           type: "SCROLL_DOWN",
           amount: actionData.amount
         });
       } else if (actionData.action === "scroll_up") {
+        sendSidebarMessage(port, `Scrolling up ${actionData.amount} pixels`);
         await chrome.tabs.sendMessage(tabId, {
           type: "SCROLL_UP",
           amount: actionData.amount
         });
       } else if (actionData.action === "send_keys") {
+        sendSidebarMessage(port, `Sending keys: ${actionData.keys}`);
         await chrome.tabs.sendMessage(tabId, {
           type: "SEND_KEYS",
           keys: actionData.keys
         });
       } else if (actionData.action === "extract_content") {
+        sendSidebarMessage(port, `Extracting content in ${actionData.format} format`);
         await chrome.tabs.sendMessage(tabId, {
           type: "EXTRACT_CONTENT",
           format: actionData.format
@@ -196,10 +223,12 @@ async function handleScreenshotCapture(prompt, tabId, port = null) {
       // If there's a next action and agent mode is enabled, recursively handle it
       if (actionData.next_prompt && agent_mode) {
         console.log('Agent Mode enabled, handling next action:', actionData.next_prompt);
+        // Add the next prompt to the steps history
+        const updatedSteps = [...previousSteps, `Next request: ${actionData.next_prompt}`];
         // Combine original prompt with next prompt for context
         const combinedPrompt = `Previous request: "${prompt}"\nNext request: "${actionData.next_prompt}"`;
-        // Recursively call handleScreenshotCapture with the combined prompt
-        const nextResult = await handleScreenshotCapture(combinedPrompt, tabId, port);
+        // Recursively call handleScreenshotCapture with the combined prompt and updated steps
+        const nextResult = await handleScreenshotCapture(combinedPrompt, tabId, port, updatedSteps);
         // Return the result of the last action in the chain
         return nextResult;
       } else if (actionData.next_prompt && !agent_mode) {
@@ -240,7 +269,7 @@ chrome.runtime.onConnect.addListener((port) => {
     port.onMessage.addListener(async (message) => {
       console.log('Received message in background:', message);
       if (message.type === "CAPTURE_SCREENSHOT") {
-        const result = await handleScreenshotCapture(message.prompt, message.tabId, port);
+        const result = await handleScreenshotCapture(message.prompt, message.tabId, port, []);
         port.postMessage({
           type: "AI_RESPONSE",
           success: result.success,
@@ -299,18 +328,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.type === "CAPTURE_SCREENSHOT") {
-    // Use the tabId from the request if available, otherwise use sender.tab.id
     const tabId = request.tabId || sender.tab.id;
-    
-    // Handle screenshot capture and send response
-    handleScreenshotCapture(request.prompt, tabId)
+    handleScreenshotCapture(request.prompt, tabId, null, [])
       .then(result => {
         sendResponse(result);
       })
       .catch(error => {
         sendResponse({ success: false, error: error.message });
       });
-    
     return true;  // Will respond asynchronously
   }
 
@@ -434,7 +459,7 @@ function trimDOMTree(tree) {
 }
 
 // Function to send prompt + screenshot to AI provider
-async function sendPromptAndScreenshotToServer(prompt, base64Screenshot) {
+async function sendPromptAndScreenshotToServer(prompt, base64Screenshot, previousSteps = []) {
   console.log('Starting AI service request with prompt:', prompt);
   
   // Get provider and settings from storage
@@ -488,33 +513,54 @@ async function sendPromptAndScreenshotToServer(prompt, base64Screenshot) {
     throw new Error('Failed to analyze page structure: ' + error.message);
   }
 
-  // Add interactive elements to the prompt
-  console.log('Building enhanced prompt with', interactiveElements.length, 'interactive elements');
-  const enhancedPrompt = `
-As a browser automation agent, analyze the following webpage elements and help with: ${prompt}
+  // Format previous steps for the prompt
+  const isFirstTime = previousSteps.length === 0;
+  const stepsHistory = previousSteps.length > 0 
+    ? previousSteps.map((step, index) => `${index + 1}. ${step}`).join('\n')
+    : 'No previous steps.';
 
-The current page contains the following list of interactive elements, each with a unique index:
+  // Add first-time instructions if this is the first interaction
+  const stepInstructions = isFirstTime
+    ? `
+Think through the user's request and identify if you need more than one step to accomplish it. If you need more than one step you must use the 'next_prompt' action to prompt the next step in your sequence.
+
+`
+    : `
+You thought through the user's request and identified that you need more than one step to accomplish it.
+You performed the following steps so far: 
+${stepsHistory}
+You must use the 'next_prompt' action to prompt the next step in your sequence.
+`;
+
+  // Add interactive elements to the prompt
+  const enhancedPrompt = `
+The user's original request is: ${prompt}
+
+${stepInstructions}
+
+After executing your last action, a screenshot of the page is attached. The page contains the following list of interactive elements, each with a unique index:
 
 \`\`\`json
 ${JSON.stringify(interactiveElements, null, 2)}
 \`\`\`
 
-Based on these elements and the screenshot, determine the appropriate action to take. Available actions:
+Based on these elements and the screenshot, determine if the user's request is complete. If not, determine the appropriate action to take. Available actions:
 
 1. Click: Click on an interactive element by index
 2. Fill: Input text into a form field by index
-3. Search Google: Search Google in the current tab
-4. Navigate: Go to URLs or go back in history
-5. Scroll: Scroll the page up or down
-6. Send Keys: Send keyboard inputs to the active element
-7. Extract Content: Get page content as text or markdown
+3. Fill and Submit: Input text into a form field by index and submit with Enter. This is perfect for filling a single field form like search bars or passwords.
+4. Search Google: Search Google in the current tab
+5. Navigate: Go to URLs or go back in history
+6. Scroll: Scroll the page up or down
+7. Send Keys: Send keyboard inputs to the active element
+8. Extract Content: Get page content as text or markdown
 
 Respond with a JSON object containing:
 {
-  "action": "The type of action to perform (click, fill, search_google, go_to_url, go_back, scroll_down, scroll_up, send_keys, extract_content)",
-  "index": "The index number of the element to interact with (for click and fill)",
+  "action": "The type of action to perform (click, fill, fill_and_submit, search_google, go_to_url, go_back, scroll_down, scroll_up, send_keys, extract_content)",
+  "index": "The index number of the element to interact with (for click, fill, and fill_and_submit)",
   "description": "A clear description of what will be done",
-  "value": "The value to fill (for fill action)",
+  "value": "The value to fill (for fill and fill_and_submit actions)",
   "query": "The search query (for search_google action)",
   "url": "The URL to navigate to (for go_to_url action)",
   "amount": "The scroll amount in pixels (optional for scroll actions)",
@@ -523,7 +569,7 @@ Respond with a JSON object containing:
   "next_prompt": "The next action to perform if any (optional)"
 }
 
-Choose the most appropriate action based on the user's request.
+Choose the most appropriate action based to complete the user's request.
 
 If you expect that the user's request requires a followup step, prepare a prompt for yourself and include it in the JSON object as "next_prompt"; otherwise, if the request is complete, don't include it.`;
 

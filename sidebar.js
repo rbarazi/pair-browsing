@@ -78,7 +78,9 @@ async function debugLog(message) {
 
 // Handle messages from background
 function handlePortMessage(message) {
-  if (message.type === "AI_RESPONSE") {
+  if (message.type === "ASSISTANT_MESSAGE") {
+    addMessage(message.message, false);
+  } else if (message.type === "AI_RESPONSE") {
     if (!message.success) {
       addMessage(`Error: ${message.error || 'Unknown error occurred'}`);
       return;
@@ -161,9 +163,46 @@ function addDebugScreenshot(imageUri) {
 
 // Parse and display AI response
 function displayAIResponse(clickData) {
+  // Display the main action description
   addMessage(`Assistant: ${clickData.description}`);
-  if (typeof clickData.index === 'number') {
-    addMessage(`Selected element index: ${clickData.index}`);
+
+  // Display additional details based on action type
+  switch (clickData.action) {
+    case "click":
+      addMessage(`Action: Clicking element at index ${clickData.index}`);
+      break;
+    case "fill":
+      addMessage(`Action: Filling form field at index ${clickData.index} with "${clickData.value}"`);
+      break;
+    case "fill_and_submit":
+      addMessage(`Action: Filling form field at index ${clickData.index} with "${clickData.value}" and submitting`);
+      break;
+    case "search_google":
+      addMessage(`Action: Searching Google for "${clickData.query}"`);
+      break;
+    case "go_to_url":
+      addMessage(`Action: Navigating to ${clickData.url}`);
+      break;
+    case "go_back":
+      addMessage(`Action: Going back to previous page`);
+      break;
+    case "scroll_down":
+    case "scroll_up":
+      const direction = clickData.action === "scroll_down" ? "down" : "up";
+      const amount = clickData.amount ? `${clickData.amount}px` : "one page";
+      addMessage(`Action: Scrolling ${direction} ${amount}`);
+      break;
+    case "send_keys":
+      addMessage(`Action: Sending keys "${clickData.keys}"`);
+      break;
+    case "extract_content":
+      addMessage(`Action: Extracting content in ${clickData.format} format`);
+      break;
+  }
+
+  // If there's a next action planned, show it
+  if (clickData.next_prompt) {
+    addMessage(`Next action: ${clickData.next_prompt}`);
   }
 }
 
