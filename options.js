@@ -14,6 +14,7 @@ function saveOptions() {
     '5. Include a clear description of what exactly will be clicked\n\n' +
     'Remember: Accuracy is crucial - the coordinates must point to the exact clickable area of the element.';
   const debugMode = document.getElementById('debugMode').checked;
+  const agentMode = document.getElementById('agentMode').checked;
 
   chrome.storage.local.set(
     {
@@ -24,6 +25,7 @@ function saveOptions() {
       gemini_model: geminiModel,
       system_prompt: systemPrompt,
       debug_mode: debugMode,
+      agent_mode: agentMode,
     },
     () => {
       const status = document.getElementById('status');
@@ -70,6 +72,7 @@ For each request, analyze the webpage elements and determine the appropriate act
   "format": "The output format for extract_content (text or markdown)"
 }`,
       debug_mode: false,
+      agent_mode: false,
     },
     (items) => {
       document.getElementById('provider').value = items.provider;
@@ -79,6 +82,7 @@ For each request, analyze the webpage elements and determine the appropriate act
       document.getElementById('geminiModel').value = items.gemini_model;
       document.getElementById('systemPrompt').value = items.system_prompt;
       document.getElementById('debugMode').checked = items.debug_mode;
+      document.getElementById('agentMode').checked = items.agent_mode;
       updateVisibility();
     }
   );

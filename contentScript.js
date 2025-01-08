@@ -603,6 +603,43 @@ async function handleFill(selector, value) {
   }
 }
 
+// Function to check if document is ready for interaction
+function isDocumentReady() {
+  // Check if document is in complete or interactive state
+  if (document.readyState !== 'complete' && document.readyState !== 'interactive') {
+    return false;
+  }
+
+  // Check if any iframes are still loading
+  const iframes = document.getElementsByTagName('iframe');
+  for (const iframe of iframes) {
+    try {
+      const iframeDoc = iframe.contentDocument;
+      if (iframeDoc && iframeDoc.readyState !== 'complete') {
+        return false;
+      }
+    } catch (e) {
+      // Cross-origin iframe, ignore
+    }
+  }
+
+  // Check if any images are still loading
+  const images = document.getElementsByTagName('img');
+  for (const img of images) {
+    if (!img.complete) {
+      return false;
+    }
+  }
+
+  // Check if any dynamic content is still loading (e.g., React, Vue, Angular)
+  const loadingIndicators = document.querySelectorAll('[aria-busy="true"], [role="progressbar"]');
+  if (loadingIndicators.length > 0) {
+    return false;
+  }
+
+  return true;
+}
+
 // Update the message listener
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   try {
@@ -612,6 +649,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } else if (message.type === "CLEANUP_MARKUP") {
       cleanupExtensionMarkup();
       sendResponse({ success: true });
+    } else if (message.type === "CHECK_DOCUMENT_READY") {
+      sendResponse({ success: true, ready: isDocumentReady() });
     } else if (message.type === "PERFORM_CLICK") {
       const elementData = interactiveElementsMap.get(parseInt(message.index));
       console.log("Attempting to click element:", {
@@ -655,6 +694,44 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         })
         .catch((error) => {
           console.error("Error performing fill:", error);
+          sendResponse({ success: false, error: error.message });
+        });
+    } else if (message.type === "PERFORM_FILL_AND_SUBMIT") {
+      const elementData = interactiveElementsMap.get(parseInt(message.index));
+      console.log("Attempting to fill and submit element:", {
+        requestedIndex: message.index,
+        foundElement: elementData,
+        value: message.value,
+      });
+      if (!elementData) {
+        sendResponse({
+          success: false,
+          error: `No element found with index: ${message.index}`,
+        });
+        return true;
+      }
+
+      // First fill the element
+      handleFill(elementData.xpath, message.value)
+        .then(async (success) => {
+          if (success) {
+            // After filling, send Enter key
+            const element = findElementBySelector(elementData.xpath);
+            if (element) {
+              element.dispatchEvent(new KeyboardEvent('keydown', {
+                key: 'Enter',
+                code: 'Enter',
+                bubbles: true,
+                cancelable: true
+              }));
+            }
+            sendResponse({ success: true });
+          } else {
+            sendResponse({ success: false, error: "Failed to fill element" });
+          }
+        })
+        .catch((error) => {
+          console.error("Error performing fill and submit:", error);
           sendResponse({ success: false, error: error.message });
         });
     } else if (message.type === "SEARCH_GOOGLE") {

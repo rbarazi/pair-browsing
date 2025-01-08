@@ -26,6 +26,53 @@ async function cleanupExtensionMarkup(tabId) {
   }
 }
 
+// Function to wait for page load completion
+async function waitForPageLoad(tabId) {
+  return new Promise((resolve) => {
+    // First, check if the page is already complete
+    chrome.tabs.get(tabId, async (tab) => {
+      if (tab.status === 'complete') {
+        // Give a small delay to ensure rendering
+        await new Promise(r => setTimeout(r, 50));
+        // Double check document readiness through content script
+        try {
+          const response = await chrome.tabs.sendMessage(tabId, { type: "CHECK_DOCUMENT_READY" });
+          if (response.ready) {
+            resolve();
+            return;
+          }
+        } catch (error) {
+          console.warn('Failed to check document ready state:', error);
+        }
+      }
+
+      // If not complete or check failed, listen for the complete status
+      const listener = (updatedTabId, changeInfo) => {
+        if (updatedTabId === tabId && changeInfo.status === 'complete') {
+          chrome.tabs.onUpdated.removeListener(listener);
+          // Give a small delay to ensure rendering
+          setTimeout(async () => {
+            try {
+              // Double check document readiness through content script
+              const response = await chrome.tabs.sendMessage(tabId, { type: "CHECK_DOCUMENT_READY" });
+              if (response.ready) {
+                resolve();
+              } else {
+                // If not ready, wait a bit and resolve anyway to prevent hanging
+                setTimeout(resolve, 100);
+              }
+            } catch (error) {
+              console.warn('Failed to check document ready state:', error);
+              resolve(); // Resolve anyway to prevent hanging
+            }
+          }, 50);
+        }
+      };
+      chrome.tabs.onUpdated.addListener(listener);
+    });
+  });
+}
+
 // Function to handle screenshot capture
 async function handleScreenshotCapture(prompt, tabId, port = null) {
   try {
@@ -69,11 +116,24 @@ async function handleScreenshotCapture(prompt, tabId, port = null) {
     
     // Send to AI service
     const response = await sendPromptAndScreenshotToServer(prompt, screenshotUrl);
-    console.log('AI service response received');
+    console.log('AI service response received:', {
+      success: response.success,
+      response: response.response,
+      parsedResponse: response.success ? JSON.parse(response.response) : null
+    });
     
     // Send the response to the content script for handling
     if (response.success) {
       const actionData = JSON.parse(response.response);
+      console.log('Parsed action data:', {
+        action: actionData.action,
+        index: actionData.index,
+        value: actionData.value,
+        description: actionData.description,
+        next_prompt: actionData.next_prompt
+      });
+      
+      // Handle the current action
       if (actionData.action === "click") {
         await chrome.tabs.sendMessage(tabId, {
           type: "PERFORM_CLICK",
@@ -82,6 +142,12 @@ async function handleScreenshotCapture(prompt, tabId, port = null) {
       } else if (actionData.action === "fill") {
         await chrome.tabs.sendMessage(tabId, {
           type: "PERFORM_FILL",
+          index: actionData.index,
+          value: actionData.value
+        });
+      } else if (actionData.action === "fill_and_submit") {
+        await chrome.tabs.sendMessage(tabId, {
+          type: "PERFORM_FILL_AND_SUBMIT",
           index: actionData.index,
           value: actionData.value
         });
@@ -119,6 +185,25 @@ async function handleScreenshotCapture(prompt, tabId, port = null) {
           type: "EXTRACT_CONTENT",
           format: actionData.format
         });
+      }
+
+      // Wait for the page to fully load and render after the action
+      await waitForPageLoad(tabId);
+
+      // Get agent mode setting
+      const { agent_mode } = await chrome.storage.local.get({ agent_mode: false });
+
+      // If there's a next action and agent mode is enabled, recursively handle it
+      if (actionData.next_prompt && agent_mode) {
+        console.log('Agent Mode enabled, handling next action:', actionData.next_prompt);
+        // Combine original prompt with next prompt for context
+        const combinedPrompt = `Previous request: "${prompt}"\nNext request: "${actionData.next_prompt}"`;
+        // Recursively call handleScreenshotCapture with the combined prompt
+        const nextResult = await handleScreenshotCapture(combinedPrompt, tabId, port);
+        // Return the result of the last action in the chain
+        return nextResult;
+      } else if (actionData.next_prompt && !agent_mode) {
+        console.log('Agent Mode disabled, skipping next action:', actionData.next_prompt);
       }
     }
     
@@ -408,7 +493,7 @@ async function sendPromptAndScreenshotToServer(prompt, base64Screenshot) {
   const enhancedPrompt = `
 As a browser automation agent, analyze the following webpage elements and help with: ${prompt}
 
-The page contains the following list of interactive elements, each with a unique index:
+The current page contains the following list of interactive elements, each with a unique index:
 
 \`\`\`json
 ${JSON.stringify(interactiveElements, null, 2)}
@@ -434,10 +519,13 @@ Respond with a JSON object containing:
   "url": "The URL to navigate to (for go_to_url action)",
   "amount": "The scroll amount in pixels (optional for scroll actions)",
   "keys": "The keys to send (for send_keys action)",
-  "format": "The output format for extract_content (text or markdown)"
+  "format": "The output format for extract_content (text or markdown)",
+  "next_prompt": "The next action to perform if any (optional)"
 }
 
-Choose the most appropriate action based on the user's request.`;
+Choose the most appropriate action based on the user's request.
+
+If you expect that the user's request requires a followup step, prepare a prompt for yourself and include it in the JSON object as "next_prompt"; otherwise, if the request is complete, don't include it.`;
 
   console.log('Enhanced prompt built, sending to AI service');
   let response;
@@ -501,7 +589,7 @@ async function sendToOpenAI(prompt, base64Screenshot, apiKey, model, systemPromp
           properties: {
             action: {
               type: "string",
-              enum: ["click", "fill", "search_google", "go_to_url", "go_back", "scroll_down", "scroll_up", "send_keys", "extract_content"],
+              enum: ["click", "fill", "fill_and_submit", "search_google", "go_to_url", "go_back", "scroll_down", "scroll_up", "send_keys", "extract_content"],
               description: "The type of action to perform"
             },
             index: {
