@@ -296,6 +296,7 @@ async function handleClick(elementData) {
     }
 
     const element = getLocateElement(elementData);
+    console.log("Clickable element:", element);
     if (!element) {
       console.warn(`Element not found with selector: ${elementData.xpath}`);
       return false;
@@ -315,8 +316,17 @@ async function handleClick(elementData) {
 
     // Show click animation
     showClickIndicator(x, y);
+    // Try native click() if element supports it
+    if (typeof element.click === 'function') {
+      try {
+        element.click();
+        return; // Exit if native click is successful
+      } catch (error) {
+        console.log('Native click() failed:', error);
+      }
+    }
 
-    // Trigger events after cursor reaches the target
+    // Trigger events after cursor reaches the target only if native click failed
     ["mousedown", "mouseup", "click"].forEach((eventType) => {
       element.dispatchEvent(
         new MouseEvent(eventType, {
@@ -324,7 +334,7 @@ async function handleClick(elementData) {
           bubbles: true,
           cancelable: true,
           clientX: x,
-          clientY: y,
+          clientY: y
         })
       );
     });
@@ -546,6 +556,7 @@ async function handleFill(elementData, value) {
     }
 
     const element = getLocateElement(elementData);
+    console.log("Filling element:", element);
     if (!element) {
       console.warn(`Element not found with selector: ${elementData.xpath}`);
       return false;
@@ -568,6 +579,8 @@ async function handleFill(elementData, value) {
 
     // Focus the element
     element.focus();
+    element.dispatchEvent(new Event("focus", { bubbles: true, composed: true }));
+    element.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
 
     // Clear existing value if it's an input or textarea
     if (element.tagName === "INPUT" || element.tagName === "TEXTAREA") {
@@ -581,6 +594,7 @@ async function handleFill(elementData, value) {
         key: char,
         code: `Key${char.toUpperCase()}`,
         bubbles: true,
+        composed: true,
         cancelable: true,
       });
       element.dispatchEvent(keydownEvent);
@@ -591,6 +605,7 @@ async function handleFill(elementData, value) {
         code: `Key${char.toUpperCase()}`,
         bubbles: true,
         cancelable: true,
+        composed: true,
       });
       element.dispatchEvent(keypressEvent);
 
@@ -598,7 +613,7 @@ async function handleFill(elementData, value) {
       element.value += char;
 
       // Dispatch input event after each character
-      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
 
       // Create and dispatch keyup event
       const keyupEvent = new KeyboardEvent("keyup", {
@@ -614,7 +629,7 @@ async function handleFill(elementData, value) {
     }
 
     // Dispatch change event after filling
-    element.dispatchEvent(new Event("change", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
 
     // Remove highlight after a delay
     setTimeout(() => {
@@ -752,20 +767,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 key: 'Enter',
                 code: 'Enter',
                 bubbles: true,
+                composed: true,
                 cancelable: true
               }));
               element.dispatchEvent(new KeyboardEvent('keypress', {
                 key: 'Enter',
                 code: 'Enter',
                 bubbles: true,
-                cancelable: true
+                cancelable: true,
+                composed: true
               }));
               element.dispatchEvent(new KeyboardEvent('keyup', {
                 key: 'Enter',
                 code: 'Enter',
                 bubbles: true,
-                cancelable: true
+                cancelable: true,
+                composed: true
               }));
+              element.dispatchEvent(
+                new Event("submit", { bubbles: true, composed: true })
+              );
+
             }
             sendResponse({ success: true });
           } else {
@@ -822,8 +844,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           } else {
             // For regular text input
             activeElement.value += message.keys;
-            activeElement.dispatchEvent(new Event("input", { bubbles: true }));
-            activeElement.dispatchEvent(new Event("change", { bubbles: true }));
+            activeElement.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+            activeElement.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
           }
         }
         sendResponse({ success: true });
