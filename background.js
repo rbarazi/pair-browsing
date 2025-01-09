@@ -74,46 +74,64 @@ async function waitForPageLoad(tabId) {
   });
 }
 
-// Function to handle screenshot capture
-async function handleScreenshotCapture(prompt, tabId, port = null, previousSteps = []) {
-  try {
-    // Get the window ID for the tab
+class ScreenshotManager {
+  constructor() {
+    this.debugMode = false;
+  }
+
+  async initialize() {
+    const { debug_mode } = await chrome.storage.local.get({ debug_mode: false });
+    this.debugMode = debug_mode;
+  }
+
+  async captureScreenshot(tabId) {
     const tab = await chrome.tabs.get(tabId);
     if (!tab) {
       throw new Error('Tab not found');
     }
 
     // Clean up any extension markup before taking screenshot
-    // await cleanupExtensionMarkup(tab.id);
+    await cleanupExtensionMarkup(tab.id);
 
     // Capture the screenshot
     const screenshotUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
     console.log('Screenshot captured successfully');
     
-    // Get debug mode setting
-    const { debug_mode } = await chrome.storage.local.get({ debug_mode: false });
-    
-    // If debug mode is enabled, send screenshot to content script
-    if (debug_mode) {
-      try {
-        await chrome.tabs.sendMessage(tab.id, {
+    return screenshotUrl;
+  }
+
+  async sendDebugScreenshot(tabId, port, screenshotUrl) {
+    if (!this.debugMode) return;
+
+    try {
+      await chrome.tabs.sendMessage(tabId, {
+        type: "DEBUG_SCREENSHOT",
+        imageUri: screenshotUrl
+      });
+      console.log('Debug screenshot sent to content script');
+      
+      if (port) {
+        port.postMessage({
           type: "DEBUG_SCREENSHOT",
           imageUri: screenshotUrl
         });
-        console.log('Debug screenshot sent to content script');
-        
-        // If we have a port (sidebar connection), send debug screenshot there too
-        if (port) {
-          port.postMessage({
-            type: "DEBUG_SCREENSHOT",
-            imageUri: screenshotUrl
-          });
-          console.log('Debug screenshot sent to sidebar');
-        }
-      } catch (error) {
-        console.warn('Failed to send debug screenshot:', error);
+        console.log('Debug screenshot sent to sidebar');
       }
+    } catch (error) {
+      console.warn('Failed to send debug screenshot:', error);
     }
+  }
+}
+
+// Function to handle screenshot capture
+async function handleScreenshotCapture(prompt, tabId, port = null, previousSteps = []) {
+  const screenshotManager = new ScreenshotManager();
+  await screenshotManager.initialize();
+
+  try {
+    // Capture screenshot
+    const screenshotUrl = await screenshotManager.captureScreenshot(tabId);
+    await screenshotManager.sendDebugScreenshot(tabId, port, screenshotUrl);
     
     // Send to AI service
     const response = await sendPromptAndScreenshotToServer(prompt, screenshotUrl, previousSteps);
@@ -126,106 +144,23 @@ async function handleScreenshotCapture(prompt, tabId, port = null, previousSteps
     // Send the response to the content script for handling
     if (response.success) {
       const actionData = JSON.parse(response.response);
-      console.log('Parsed action data:', {
-        action: actionData.action,
-        index: actionData.index,
-        value: actionData.value,
-        description: actionData.description,
-        next_prompt: actionData.next_prompt
-      });
+      console.log('Parsed action data:', actionData);
       
       // Send initial action description to sidebar
       sendSidebarMessage(port, `Executing: ${actionData.description}`);
       
       // Handle the current action
-      if (actionData.action === "click") {
-        sendSidebarMessage(port, `Clicking element at index ${actionData.index}`);
-        await chrome.tabs.sendMessage(tabId, {
-          type: "PERFORM_CLICK",
-          index: actionData.index
-        });
-      } else if (actionData.action === "fill") {
-        sendSidebarMessage(port, `Filling form field at index ${actionData.index}`);
-        await chrome.tabs.sendMessage(tabId, {
-          type: "PERFORM_FILL",
-          index: actionData.index,
-          value: actionData.value
-        });
-      } else if (actionData.action === "fill_and_submit") {
-        sendSidebarMessage(port, `Filling form field at index ${actionData.index} and submitting`);
-        await chrome.tabs.sendMessage(tabId, {
-          type: "PERFORM_CLICK",
-          index: actionData.index,
-        });
-        await chrome.tabs.sendMessage(tabId, {
-          type: "PERFORM_FILL_AND_SUBMIT",
-          index: actionData.index,
-          value: actionData.value
-        });
-      } else if (actionData.action === "search_google") {
-        sendSidebarMessage(port, `Searching Google for query: ${actionData.query}`);
-        await chrome.tabs.sendMessage(tabId, {
-          type: "SEARCH_GOOGLE",
-          query: actionData.query
-        });
-      } else if (actionData.action === "go_to_url") {
-        sendSidebarMessage(port, `Navigating to URL: ${actionData.url}`);
-        await chrome.tabs.sendMessage(tabId, {
-          type: "GO_TO_URL",
-          url: actionData.url
-        });
-      } else if (actionData.action === "go_back") {
-        sendSidebarMessage(port, `Going back in history`);
-        await chrome.tabs.sendMessage(tabId, {
-          type: "GO_BACK"
-        });
-      } else if (actionData.action === "scroll_down") {
-        sendSidebarMessage(port, `Scrolling down ${actionData.amount} pixels`);
-        await chrome.tabs.sendMessage(tabId, {
-          type: "SCROLL_DOWN",
-          amount: actionData.amount
-        });
-      } else if (actionData.action === "scroll_up") {
-        sendSidebarMessage(port, `Scrolling up ${actionData.amount} pixels`);
-        await chrome.tabs.sendMessage(tabId, {
-          type: "SCROLL_UP",
-          amount: actionData.amount
-        });
-      } else if (actionData.action === "send_keys") {
-        sendSidebarMessage(port, `Sending keys: ${actionData.keys}`);
-        await chrome.tabs.sendMessage(tabId, {
-          type: "SEND_KEYS",
-          keys: actionData.keys
-        });
-      } else if (actionData.action === "extract_content") {
-        sendSidebarMessage(port, `Extracting content in ${actionData.format} format`);
-        const actionResponse = await chrome.tabs.sendMessage(tabId, {
-          type: "EXTRACT_CONTENT",
-          format: actionData.format
-        });
-        sendSidebarMessage(port, `Extracted content: ${actionResponse.content}`);
-        console.log('Extracted content:', actionResponse.content);
-      }
+      const actionHandler = new ActionHandler(tabId, port);
+      await actionHandler.handleAction(actionData);
 
       // Wait for the page to fully load and render after the action
       await waitForPageLoad(tabId);
 
-      // Get agent mode setting
-      const { agent_mode } = await chrome.storage.local.get({ agent_mode: false });
-
-      // If there's a next action and agent mode is enabled, recursively handle it
-      if (actionData.next_prompt && agent_mode) {
-        console.log('Agent Mode enabled, handling next action:', actionData.next_prompt);
-        // Add the next prompt to the steps history
-        const updatedSteps = [...previousSteps, `Next request: ${actionData.next_prompt}`];
-        // Combine original prompt with next prompt for context
-        const combinedPrompt = `Previous request: "${prompt}"\nNext request: "${actionData.next_prompt}"`;
-        // Recursively call handleScreenshotCapture with the combined prompt and updated steps
-        const nextResult = await handleScreenshotCapture(combinedPrompt, tabId, port, updatedSteps);
-        // Return the result of the last action in the chain
+      // Handle next steps if in agent mode
+      const stepManager = new StepManager(tabId, port);
+      const nextResult = await stepManager.handleNextStep(actionData, prompt, previousSteps);
+      if (nextResult) {
         return nextResult;
-      } else if (actionData.next_prompt && !agent_mode) {
-        console.log('Agent Mode disabled, skipping next action:', actionData.next_prompt);
       }
     }
     
@@ -612,6 +547,159 @@ async function sendToGemini(prompt, base64Screenshot, apiKey, model, systemPromp
   } catch (error) {
     console.error('Error in Gemini request:', error);
     throw new Error(`Gemini API error: ${error.message}`);
+  }
+}
+
+class ActionHandler {
+  constructor(tabId, port) {
+    this.tabId = tabId;
+    this.port = port;
+  }
+
+  async handleAction(actionData) {
+    const actionMap = {
+      click: this.handleClick.bind(this),
+      fill: this.handleFill.bind(this),
+      fill_and_submit: this.handleFillAndSubmit.bind(this),
+      search_google: this.handleSearchGoogle.bind(this),
+      go_to_url: this.handleGoToUrl.bind(this),
+      go_back: this.handleGoBack.bind(this),
+      scroll_down: this.handleScrollDown.bind(this),
+      scroll_up: this.handleScrollUp.bind(this),
+      send_keys: this.handleSendKeys.bind(this),
+      extract_content: this.handleExtractContent.bind(this)
+    };
+
+    const handler = actionMap[actionData.action];
+    if (!handler) {
+      throw new Error(`Unknown action type: ${actionData.action}`);
+    }
+
+    await handler(actionData);
+  }
+
+  async handleClick({ index }) {
+    sendSidebarMessage(this.port, `Clicking element at index ${index}`);
+    await chrome.tabs.sendMessage(this.tabId, {
+      type: "PERFORM_CLICK",
+      index
+    });
+  }
+
+  async handleFill({ index, value }) {
+    sendSidebarMessage(this.port, `Filling form field at index ${index}`);
+    await chrome.tabs.sendMessage(this.tabId, {
+      type: "PERFORM_FILL",
+      index,
+      value
+    });
+  }
+
+  async handleFillAndSubmit({ index, value }) {
+    sendSidebarMessage(this.port, `Filling form field at index ${index} and submitting`);
+    await chrome.tabs.sendMessage(this.tabId, {
+      type: "PERFORM_CLICK",
+      index
+    });
+    await chrome.tabs.sendMessage(this.tabId, {
+      type: "PERFORM_FILL_AND_SUBMIT",
+      index,
+      value
+    });
+  }
+
+  async handleSearchGoogle({ query }) {
+    sendSidebarMessage(this.port, `Searching Google for query: ${query}`);
+    await chrome.tabs.sendMessage(this.tabId, {
+      type: "SEARCH_GOOGLE",
+      query
+    });
+  }
+
+  async handleGoToUrl({ url }) {
+    sendSidebarMessage(this.port, `Navigating to URL: ${url}`);
+    await chrome.tabs.sendMessage(this.tabId, {
+      type: "GO_TO_URL",
+      url
+    });
+  }
+
+  async handleGoBack() {
+    sendSidebarMessage(this.port, `Going back in history`);
+    await chrome.tabs.sendMessage(this.tabId, {
+      type: "GO_BACK"
+    });
+  }
+
+  async handleScrollDown({ amount }) {
+    sendSidebarMessage(this.port, `Scrolling down ${amount} pixels`);
+    await chrome.tabs.sendMessage(this.tabId, {
+      type: "SCROLL_DOWN",
+      amount
+    });
+  }
+
+  async handleScrollUp({ amount }) {
+    sendSidebarMessage(this.port, `Scrolling up ${amount} pixels`);
+    await chrome.tabs.sendMessage(this.tabId, {
+      type: "SCROLL_UP",
+      amount
+    });
+  }
+
+  async handleSendKeys({ keys }) {
+    sendSidebarMessage(this.port, `Sending keys: ${keys}`);
+    await chrome.tabs.sendMessage(this.tabId, {
+      type: "SEND_KEYS",
+      keys
+    });
+  }
+
+  async handleExtractContent({ format }) {
+    sendSidebarMessage(this.port, `Extracting content in ${format} format`);
+    const actionResponse = await chrome.tabs.sendMessage(this.tabId, {
+      type: "EXTRACT_CONTENT",
+      format
+    });
+    sendSidebarMessage(this.port, `Extracted content: ${actionResponse.content}`);
+    console.log('Extracted content:', actionResponse.content);
+  }
+}
+
+class StepManager {
+  constructor(tabId, port) {
+    this.tabId = tabId;
+    this.port = port;
+    this.agentMode = false;
+  }
+
+  async initialize() {
+    const { agent_mode } = await chrome.storage.local.get({ agent_mode: false });
+    this.agentMode = agent_mode;
+  }
+
+  async handleNextStep(actionData, currentPrompt, previousSteps) {
+    await this.initialize();
+
+    if (!actionData.next_prompt) {
+      return null;
+    }
+
+    if (!this.agentMode) {
+      console.log('Agent Mode disabled, skipping next action:', actionData.next_prompt);
+      return null;
+    }
+
+    console.log('Agent Mode enabled, handling next action:', actionData.next_prompt);
+    
+    // Add the next prompt to the steps history
+    const updatedSteps = [...previousSteps, `Next request: ${actionData.next_prompt}`];
+    
+    // Combine original prompt with next prompt for context
+    const combinedPrompt = `Previous request: "${currentPrompt}"\nNext request: "${actionData.next_prompt}"`;
+    
+    // Recursively call handleScreenshotCapture with the combined prompt and updated steps
+    return await handleScreenshotCapture(combinedPrompt, this.tabId, this.port, updatedSteps);
   }
 }
 
