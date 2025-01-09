@@ -4,13 +4,12 @@
 let cursorElement = null;
 
 // Add a global map to store interactive elements by index
-let interactiveElementsMap = new Map();
-let currentHighlightIndex = 0;
-let doHighlightElements = true;
+let interactiveElementsMap = [];
+let doHighlightElements =  0;
 
 // Function to reset the interactive elements tracking
 function resetInteractiveElements() {
-  interactiveElementsMap.clear();
+  interactiveElementsMap = [];
   currentHighlightIndex = 0;
 }
 
@@ -19,522 +18,208 @@ function getElementByIndex(index) {
   console.log("Getting element by index:", index);
   const elementData = interactiveElementsMap[index];
   console.log("Interactive elements map:", elementData);
-  return elementData ? findElementBySelector(elementData.xpath) : null;
+  return elementData ? getLocateElement(elementData) : null;
+  // return elementData ? findElementBySelector(elementData.xpath) : null;
 }
 
-let highlightIndex = 0; // Reset highlight index
+// ==========================================================
+// 1) Utility to build a CSS selector from an element object
+//    (similar to the earlier snippet):
+// ==========================================================
+function convertSimpleXPathToCssSelector(xpath) {
+  if (!xpath) return '';
 
-function highlightElement(element, index, parentIframe = null) {
-  // Create or get highlight container
-  let container = document.getElementById("playwright-highlight-container");
-  if (!container) {
-    container = document.createElement("div");
-    container.id = "playwright-highlight-container";
-    container.style.position = "fixed";
-    container.style.pointerEvents = "none";
-    container.style.top = "0";
-    container.style.left = "0";
-    container.style.width = "100%";
-    container.style.height = "100%";
-    container.style.zIndex = "2147483647"; // Maximum z-index value
-    document.documentElement.appendChild(container);
-  }
+  // Remove leading slashes
+  const normalized = xpath.replace(/^\/+/, '');
+  const parts = normalized.split('/');
+  const cssParts = [];
 
-  // Generate a color based on the index
-  const colors = [
-    "#FF0000",
-    "#00FF00",
-    "#0000FF",
-    "#FFA500",
-    "#800080",
-    "#008080",
-    "#FF69B4",
-    "#4B0082",
-    "#FF4500",
-    "#2E8B57",
-    "#DC143C",
-    "#4682B4",
-  ];
-  const colorIndex = index % colors.length;
-  const baseColor = colors[colorIndex];
-  const backgroundColor = `${baseColor}1A`; // 10% opacity version of the color
+  for (const part of parts) {
+    if (!part) continue;
 
-  // Create highlight overlay
-  const overlay = document.createElement("div");
-  overlay.style.position = "absolute";
-  overlay.style.border = `2px solid ${baseColor}`;
-  overlay.style.backgroundColor = backgroundColor;
-  overlay.style.pointerEvents = "none";
-  overlay.style.boxSizing = "border-box";
+    if (part.includes('[')) {
+      // Something like div[1], div[last()]
+      const bracketIndex = part.indexOf('[');
+      let basePart = part.slice(0, bracketIndex);
+      const indexPart = part.slice(bracketIndex);
+      // e.g. "[1][2]" => split on ']' => ["[1","[2",""]
+      const indices = indexPart.split(']').filter(Boolean).map(s => s.replace('[', ''));
 
-  // Position overlay based on element
-  const rect = element.getBoundingClientRect();
-  let top = rect.top;
-  let left = rect.left;
-
-  // Adjust position if element is inside an iframe
-  if (parentIframe) {
-    const iframeRect = parentIframe.getBoundingClientRect();
-    top += iframeRect.top;
-    left += iframeRect.left;
-  }
-
-  overlay.style.top = `${top}px`;
-  overlay.style.left = `${left}px`;
-  overlay.style.width = `${rect.width}px`;
-  overlay.style.height = `${rect.height}px`;
-
-  // Create label
-  const label = document.createElement("div");
-  label.className = "playwright-highlight-label";
-  label.style.position = "absolute";
-  label.style.background = baseColor;
-  label.style.color = "white";
-  label.style.padding = "1px 4px";
-  label.style.borderRadius = "4px";
-  label.style.fontSize = `${Math.min(12, Math.max(8, rect.height / 2))}px`; // Responsive font size
-  label.textContent = index;
-
-  // Calculate label position
-  const labelWidth = 20; // Approximate width
-  const labelHeight = 16; // Approximate height
-
-  // Default position (top-right corner inside the box)
-  let labelTop = top + 2;
-  let labelLeft = left + rect.width - labelWidth - 2;
-
-  // Adjust if box is too small
-  if (rect.width < labelWidth + 4 || rect.height < labelHeight + 4) {
-    // Position outside the box if it's too small
-    labelTop = top - labelHeight - 2;
-    labelLeft = left + rect.width - labelWidth;
-  }
-
-  // Ensure label stays within viewport
-  if (labelTop < 0) labelTop = top + 2;
-  if (labelLeft < 0) labelLeft = left + 2;
-  if (labelLeft + labelWidth > window.innerWidth) {
-    labelLeft = left + rect.width - labelWidth - 2;
-  }
-
-  label.style.top = `${labelTop}px`;
-  label.style.left = `${labelLeft}px`;
-
-  // Add to container
-  container.appendChild(overlay);
-  container.appendChild(label);
-
-  // Store reference for cleanup
-  element.setAttribute(
-    "browser-user-highlight-id",
-    `playwright-highlight-${index}`
-  );
-
-  return index + 1;
-}
-
-// Helper function to generate XPath as a tree
-function getXPathTree(element, stopAtBoundary = true) {
-  const segments = [];
-  let currentElement = element;
-
-  while (currentElement && currentElement.nodeType === Node.ELEMENT_NODE) {
-    // Stop if we hit a shadow root or iframe
-    if (
-      stopAtBoundary &&
-      (currentElement.parentNode instanceof ShadowRoot ||
-        currentElement.parentNode instanceof HTMLIFrameElement)
-    ) {
-      break;
-    }
-
-    let index = 0;
-    let sibling = currentElement.previousSibling;
-    while (sibling) {
-      if (
-        sibling.nodeType === Node.ELEMENT_NODE &&
-        sibling.nodeName === currentElement.nodeName
-      ) {
-        index++;
-      }
-      sibling = sibling.previousSibling;
-    }
-
-    const tagName = currentElement.nodeName.toLowerCase();
-    const xpathIndex = index > 0 ? `[${index + 1}]` : "";
-    segments.unshift(`${tagName}${xpathIndex}`);
-
-    currentElement = currentElement.parentNode;
-  }
-
-  return segments.join("/");
-}
-
-// Helper function to check if element is accepted
-function isElementAccepted(element) {
-  const leafElementDenyList = new Set([
-    "svg",
-    "script",
-    "style",
-    "link",
-    "meta",
-  ]);
-  return !leafElementDenyList.has(element.tagName.toLowerCase());
-}
-
-// Helper function to check if element is interactive
-function isInteractiveElement(element) {
-  // Base interactive elements and roles
-  const interactiveElements = new Set([
-    "a",
-    "button",
-    "details",
-    "embed",
-    "input",
-    "label",
-    "menu",
-    "menuitem",
-    "object",
-    "select",
-    "textarea",
-    "summary",
-  ]);
-
-  const interactiveRoles = new Set([
-    "button",
-    "menu",
-    "menuitem",
-    "link",
-    "checkbox",
-    "radio",
-    "slider",
-    "tab",
-    "tabpanel",
-    "textbox",
-    "combobox",
-    "grid",
-    "listbox",
-    "option",
-    "progressbar",
-    "scrollbar",
-    "searchbox",
-    "switch",
-    "tree",
-    "treeitem",
-    "spinbutton",
-    "tooltip",
-    "a-button-inner",
-    "a-dropdown-button",
-    "click",
-    "menuitemcheckbox",
-    "menuitemradio",
-    "a-button-text",
-    "button-text",
-    "button-icon",
-    "button-icon-only",
-    "button-text-icon-only",
-    "dropdown",
-    "combobox",
-  ]);
-
-  const tagName = element.tagName.toLowerCase();
-  const role = element.getAttribute("role");
-  const ariaRole = element.getAttribute("aria-role");
-  const tabIndex = element.getAttribute("tabindex");
-
-  // Basic role/attribute checks
-  const hasInteractiveRole =
-    interactiveElements.has(tagName) ||
-    interactiveRoles.has(role) ||
-    interactiveRoles.has(ariaRole) ||
-    (tabIndex !== null && tabIndex !== "-1") ||
-    element.getAttribute("data-action") === "a-dropdown-select" ||
-    element.getAttribute("data-action") === "a-dropdown-button";
-
-  if (hasInteractiveRole) return true;
-
-  // Get computed style
-  const style = window.getComputedStyle(element);
-
-  // Check if element has click-like styling
-  // const hasClickStyling = style.cursor === 'pointer' ||
-  //     element.style.cursor === 'pointer' ||
-  //     style.pointerEvents !== 'none';
-
-  // Check for event listeners
-  const hasClickHandler =
-    element.onclick !== null ||
-    element.getAttribute("onclick") !== null ||
-    element.hasAttribute("ng-click") ||
-    element.hasAttribute("@click") ||
-    element.hasAttribute("v-on:click");
-
-  // Helper function to safely get event listeners
-  function getEventListeners(el) {
-    try {
-      // Try to get listeners using Chrome DevTools API
-      return window.getEventListeners?.(el) || {};
-    } catch (e) {
-      // Fallback: check for common event properties
-      const listeners = {};
-
-      // List of common event types to check
-      const eventTypes = [
-        "click",
-        "mousedown",
-        "mouseup",
-        "touchstart",
-        "touchend",
-        "keydown",
-        "keyup",
-        "focus",
-        "blur",
-      ];
-
-      for (const type of eventTypes) {
-        const handler = el[`on${type}`];
-        if (handler) {
-          listeners[type] = [
-            {
-              listener: handler,
-              useCapture: false,
-            },
-          ];
+      for (const idx of indices) {
+        if (/^\d+$/.test(idx)) {
+          const num = parseInt(idx, 10);
+          basePart += `:nth-of-type(${num})`;
+        } else if (idx === 'last()') {
+          basePart += ':last-of-type';
+        } else if (idx.includes('position()') && idx.includes('>1')) {
+          basePart += ':nth-of-type(n+2)';
         }
       }
-
-      return listeners;
+      cssParts.push(basePart);
+    } else {
+      cssParts.push(part);
     }
   }
 
-  // Check for click-related events on the element itself
-  const listeners = getEventListeners(element);
-  const hasClickListeners =
-    listeners &&
-    (listeners.click?.length > 0 ||
-      listeners.mousedown?.length > 0 ||
-      listeners.mouseup?.length > 0 ||
-      listeners.touchstart?.length > 0 ||
-      listeners.touchend?.length > 0);
-
-  // Check for ARIA properties that suggest interactivity
-  const hasAriaProps =
-    element.hasAttribute("aria-expanded") ||
-    element.hasAttribute("aria-pressed") ||
-    element.hasAttribute("aria-selected") ||
-    element.hasAttribute("aria-checked");
-
-  // Check for form-related functionality
-  const isFormRelated =
-    element.form !== undefined ||
-    element.hasAttribute("contenteditable") ||
-    style.userSelect !== "none";
-
-  // Check if element is draggable
-  const isDraggable =
-    element.draggable || element.getAttribute("draggable") === "true";
-
-  return (
-    hasAriaProps ||
-    // hasClickStyling ||
-    hasClickHandler ||
-    hasClickListeners ||
-    // isFormRelated ||
-    isDraggable
-  );
+  return cssParts.join(' > ');
 }
 
-// Helper function to check if element is visible
-function isElementVisible(element) {
-  const style = window.getComputedStyle(element);
-  return (
-    element.offsetWidth > 0 &&
-    element.offsetHeight > 0 &&
-    style.visibility !== "hidden" &&
-    style.display !== "none"
-  );
-}
+// Some set of "safe" attributes you want to include in the selector:
+const SAFE_ATTRIBUTES = new Set([
+  'id',
+  'name',
+  'type',
+  'value',
+  'placeholder',
+  'aria-label',
+  'aria-labelledby',
+  'aria-describedby',
+  'role',
+  'for',
+  'autocomplete',
+  'required',
+  'readonly',
+  'alt',
+  'title',
+  'src',
+  'data-testid',
+  'data-id',
+  'data-qa',
+  'data-cy',
+  'href',
+  'target',
+]);
 
-// Helper function to check if element is the top element at its position
-function isTopElement(element) {
-  // Find the correct document context and root element
-  let doc = element.ownerDocument;
+const VALID_CLASS_NAME_REGEX = /^[a-zA-Z_][a-zA-Z0-9_-]*$/;
 
-  // If we're in an iframe, elements are considered top by default
-  if (doc !== window.document) {
-    return true;
-  }
-
-  // For shadow DOM, we need to check within its own root context
-  const shadowRoot = element.getRootNode();
-  if (shadowRoot instanceof ShadowRoot) {
-    const rect = element.getBoundingClientRect();
-    const point = {
-      x: rect.left + rect.width / 2,
-      y: rect.top + rect.height / 2,
-    };
-
-    try {
-      // Use shadow root's elementFromPoint to check within shadow DOM context
-      const topEl = shadowRoot.elementFromPoint(point.x, point.y);
-      if (!topEl) return false;
-
-      // Check if the element or any of its parents match our target element
-      let current = topEl;
-      while (current && current !== shadowRoot) {
-        if (current === element) return true;
-        current = current.parentElement;
-      }
-      return false;
-    } catch (e) {
-      return true; // If we can't determine, consider it visible
-    }
-  }
-
-  // Regular DOM elements
-  const rect = element.getBoundingClientRect();
-  const point = {
-    x: rect.left + rect.width / 2,
-    y: rect.top + rect.height / 2,
-  };
-
+/**
+ * Builds a more descriptive CSS selector from:
+ *   - The element's XPath (converted)
+ *   - Classes
+ *   - Additional "safe" attributes
+ */
+function enhancedCssSelectorForElement(element) {
   try {
-    const topEl = document.elementFromPoint(point.x, point.y);
-    if (!topEl) return false;
+    let cssSelector = convertSimpleXPathToCssSelector(element.xpath);
 
-    let current = topEl;
-    while (current && current !== document.documentElement) {
-      if (current === element) return true;
-      current = current.parentElement;
-    }
-    return false;
-  } catch (e) {
-    return true;
-  }
-}
-
-// Helper function to check if text node is visible
-function isTextNodeVisible(textNode) {
-  const range = document.createRange();
-  range.selectNodeContents(textNode);
-  const rect = range.getBoundingClientRect();
-
-  return (
-    rect.width !== 0 &&
-    rect.height !== 0 &&
-    rect.top >= 0 &&
-    rect.top <= window.innerHeight &&
-    textNode.parentElement?.checkVisibility({
-      checkOpacity: true,
-      checkVisibilityCSS: true,
-    })
-  );
-}
-
-// Function to traverse the DOM and create nested JSON
-async function buildDomTree(node, parentIframe = null){
-  if (!node) return null;
-
-  // Special case for text nodes
-  if (node.nodeType === Node.TEXT_NODE) {
-    const textContent = node.textContent.trim();
-    if (textContent && isTextNodeVisible(node)) {
-      return {
-        type: "TEXT_NODE",
-        text: textContent,
-        isVisible: true,
-      };
-    }
-    return null;
-  }
-
-  // Check if element is accepted
-  if (node.nodeType === Node.ELEMENT_NODE && !isElementAccepted(node)) {
-    return null;
-  }
-
-  const nodeData = {
-    tagName: node.tagName ? node.tagName.toLowerCase() : null,
-    attributes: {},
-    xpath:
-      node.nodeType === Node.ELEMENT_NODE ? getXPathTree(node, true) : null,
-    children: [],
-  };
-
-  // Copy all attributes if the node is an element
-  if (node.nodeType === Node.ELEMENT_NODE && node.attributes) {
-    // Use getAttributeNames() instead of directly iterating attributes
-    const attributeNames = node.getAttributeNames?.() || [];
-    for (const name of attributeNames) {
-      nodeData.attributes[name] = node.getAttribute(name);
-    }
-  }
-
-  if (node.nodeType === Node.ELEMENT_NODE) {
-    const isInteractive = isInteractiveElement(node);
-    const isVisible = isElementVisible(node);
-    const isTop = isTopElement(node);
-
-    nodeData.isInteractive = isInteractive;
-    nodeData.isVisible = isVisible;
-    nodeData.isTopElement = isTop;
-
-    // Highlight if element meets all criteria and highlighting is enabled
-    if (isInteractive && isVisible && isTop) {
-      nodeData.highlightIndex = highlightIndex++;
-      // Check debug mode before highlighting
-      const { debug_mode } = await chrome.storage.local.get({ debug_mode: false });
-      if (debug_mode && doHighlightElements) {
-        highlightElement(node, nodeData.highlightIndex, parentIframe);
+    // If there's a class attribute, append valid class names
+    if (element.attributes && element.attributes.class) {
+      const classes = element.attributes.class.split(/\s+/).filter(Boolean);
+      for (const cls of classes) {
+        if (VALID_CLASS_NAME_REGEX.test(cls)) {
+          cssSelector += `.${cls}`;
+        }
       }
     }
-  }
 
-  // Only add iframeContext if we're inside an iframe
-  // if (parentIframe) {
-  //     nodeData.iframeContext = `iframe[src="${parentIframe.src || ''}"]`;
-  // }
+    // Append additional safe attributes
+    for (const [attr, value] of Object.entries(element.attributes || {})) {
+      // skip class (already handled)
+      if (attr === 'class') continue;
+      if (!attr.trim()) continue;  // skip empty attribute name
+      if (!SAFE_ATTRIBUTES.has(attr)) continue;
 
-  // Only add shadowRoot field if it exists
-  if (node.shadowRoot) {
-    nodeData.shadowRoot = true;
-    // Handle shadow DOM
-    const shadowChildren = await Promise.all(
-      Array.from(node.shadowRoot.childNodes).map(child => 
-        buildDomTree(child, parentIframe)
-      )
-    );
-    nodeData.children.push(...shadowChildren.filter(Boolean));
-  }
+      // escape colons in attribute name
+      const safeAttr = attr.replace(':', '\\:');
 
-  // Handle iframes
-  if (node.tagName === "IFRAME") {
-    try {
-      const iframeDoc = node.contentDocument || node.contentWindow.document;
-      if (iframeDoc) {
-        const iframeChildren = await Promise.all(
-          Array.from(iframeDoc.body.childNodes).map(child =>
-            buildDomTree(child, node)
-          )
-        );
-        nodeData.children.push(...iframeChildren.filter(Boolean));
+      if (value === '') {
+        // e.g. [required], [checked], ...
+        cssSelector += `[${safeAttr}]`;
+      } else if (/["'<>`]/.test(value)) {
+        // If special chars, do a "contains" match
+        const safeValue = value.replace(/"/g, '\\"');
+        cssSelector += `[${safeAttr}*="${safeValue}"]`;
+      } else {
+        cssSelector += `[${safeAttr}="${value}"]`;
       }
-    } catch (e) {
-      console.warn("Unable to access iframe:", node);
     }
-  } else {
-    // Handle regular children
-    const children = await Promise.all(
-      Array.from(node.childNodes).map(child =>
-        buildDomTree(child, parentIframe)
-      )
-    );
-    nodeData.children.push(...children.filter(Boolean));
-  }
 
-  return nodeData;
+    return cssSelector || element.tagName;
+  } catch (err) {
+    // fallback
+    const tagName = element.tagName || '*';
+    const highlightIndex = element.highlightIndex;
+    return `${tagName}[highlight_index='${highlightIndex}']`;
+  }
 }
 
+// ==========================================================
+// 2) Native "getLocateElement" function to find the element
+//    directly in the DOM (without Puppeteer/Playwright).
+// ==========================================================
+/**
+ * Locates a DOM element in the current page/extension context, 
+ * even if it’s inside an iframe. We walk up the element's 
+ * "parent" chain to see if we have an iframe ancestor, then 
+ * query inside that frame's contentDocument.
+ *
+ * @param {Object} element - The DOM node object with { parent, tag_name, xpath, attributes, highlightIndex, ... }
+ * @param {Document} doc - The root Document to start from (usually window.document).
+ * @returns {HTMLElement|null}
+ */
+function getLocateElement(elementData, doc = document) {
+  const elementSelector = enhancedCssSelectorForElement(elementData)
+  let elHandle = doc.querySelector(elementSelector);
+  if (elHandle) {
+    elHandle.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    return elHandle;
+  }
+
+  // recursively loop through the parents and if a parent has a shadowRoot, call getLocateElement on it.
+  // find the first shadowRoot parent and use that for the query.
+
+  let shadowRootParent = elementData;
+  while (shadowRootParent.parent) {
+    shadowRootParent = shadowRootParent.parent;
+    if (shadowRootParent.shadowRoot) {
+      break;
+    }
+  }
+
+  if (shadowRootParent && shadowRootParent.shadowRoot) {
+    console.log("Locating shadowRoot parent", shadowRootParent);
+    const parentNode = getLocateElement(shadowRootParent);
+    if (!parentNode) {
+      return null;
+    }
+    if (parentNode.shadowRoot) {
+      console.log("parentNode", parentNode);
+      console.log("elementSelector", elementSelector);
+      elHandle = parentNode.shadowRoot.querySelector(elementSelector);
+    }
+    if (!elHandle) {
+      elHandle = parentNode.querySelector(elementSelector);
+    }
+    if (!elHandle) {
+      return null;
+    } else {
+      elHandle.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+      return elHandle;
+    }
+  }
+
+  let iframeParent = elementData;
+  while (iframeParent.parent) {
+    iframeParent = iframeParent.parent;
+    if (iframeParent.tagName === "iframe") {
+      break;
+    }
+  }
+
+  if (iframeParent && iframeParent.tagName === "iframe") {
+    const parentNode = getLocateElement(iframeParent);
+    if (!parentNode) {
+      return null;
+    }
+    elHandle = parentNode.contentDocument.querySelector(elementSelector);
+    if (!elHandle) {
+      return null;
+    } else {
+      elHandle.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+      return elHandle;
+    }
+  }
+}
 
 // Function to determine if a selector is XPath or CSS
 function isXPath(selector) {
@@ -603,16 +288,16 @@ async function animateCursorTo(targetX, targetY, duration = 500) {
 }
 
 // Update the click handler to use cursor animation
-async function handleClick(selector) {
+async function handleClick(elementData) {
   try {
-    if (!selector) {
-      console.error("No selector provided");
+    if (!elementData) {
+      console.error("No element data provided");
       return false;
     }
 
-    const element = findElementBySelector(selector);
+    const element = getLocateElement(elementData);
     if (!element) {
-      console.warn(`Element not found with selector: ${selector}`);
+      console.warn(`Element not found with selector: ${elementData.xpath}`);
       return false;
     }
 
@@ -659,10 +344,10 @@ async function handleClick(selector) {
 // Add cleanup function
 function cleanupExtensionMarkup() {
   // Remove cursor element
-  if (cursorElement) {
-    cursorElement.remove();
-    cursorElement = null;
-  }
+  // if (cursorElement) {
+  //   cursorElement.remove();
+  //   cursorElement = null;
+  // }
 
   // Remove any highlight overlays
   const overlays = document.querySelectorAll(
@@ -686,7 +371,6 @@ function cleanupExtensionMarkup() {
 function createSelectorMap(elementTree) {
   function processNode(node) {
     if (node.type === "element") {
-      console.log("Processing node:", node);
       // If this node is highlighted, store it
       if (typeof node.highlightIndex === "number") {
         interactiveElementsMap[node.highlightIndex] = node;
@@ -706,7 +390,6 @@ function createSelectorMap(elementTree) {
 function parseNode(nodeData, parent = null) {
   // Validate input
   if (!nodeData || typeof nodeData !== 'object') {
-    console.warn('Invalid nodeData provided to parseNode');
     return null;
   }
 
@@ -720,7 +403,8 @@ function parseNode(nodeData, parent = null) {
       return {
         type: 'text',
         text: nodeData.text.trim(), // Trim whitespace
-        isVisible: Boolean(nodeData.isVisible)
+        isVisible: Boolean(nodeData.isVisible),
+        parent: parent,
       };
     }
 
@@ -731,7 +415,7 @@ function parseNode(nodeData, parent = null) {
 
     const elementNode = {
       type: 'element',
-      tagName: nodeData.tagName.toLowerCase(), // Normalize tag names
+      tagName: nodeData.tagName,
       xpath: nodeData.xpath || '',
       attributes: nodeData.attributes || {},
       isVisible: Boolean(nodeData.isVisible),
@@ -740,6 +424,7 @@ function parseNode(nodeData, parent = null) {
       highlightIndex: typeof nodeData.highlightIndex === 'number' ? nodeData.highlightIndex : null,
       shadowRoot: Boolean(nodeData.shadowRoot),
       children: [], // Initialize empty array
+      parent: parent,
     };
 
     // Recursively parse children if they exist
@@ -762,23 +447,107 @@ function parseNode(nodeData, parent = null) {
 function getInteractiveElementsList(rootNode) {
   const parsedNode = parseNode(rootNode);
   createSelectorMap(parsedNode);
-  
-  // const list = Array.from(interactiveElementsMap.values());
-  console.log("Complete Interactive Elements List:", interactiveElementsMap);
+  console.log("Interactive Elements List:", interactiveElementsMap);
   return parsedNode;
 }
 
+
+
+function hasParentWithHighlightIndex(node) {
+  let current = node.parent;
+  while (current) {
+    if (typeof current.highlightIndex === "number") {
+      // If it's an integer or numeric, we treat that as having a highlight
+      return true;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
+function getAllTextTillNextClickableElement(node) {
+  const textParts = [];
+
+  function collectText(currentNode) {
+    // If we hit a different element that is highlighted, stop recursion down that branch
+    if (
+      currentNode !== node &&
+      currentNode.type === "element" &&
+      typeof currentNode.highlightIndex === "number"
+    ) {
+      return;
+    }
+
+    // If it's a text node, collect its text
+    if (currentNode.type === "text") {
+      textParts.push(currentNode.text);
+    }
+    // If it's an element node, keep recursing into its children
+    else if (currentNode.type === "element" && currentNode.children) {
+      currentNode.children.forEach((child) => collectText(child));
+    }
+  }
+
+  collectText(node);
+  return textParts.join("\n").trim();
+}
+
+function clickableElementsToString(rootNode, includeAttributes = []) {
+  const lines = [];
+
+  function processNode(node) {
+    if (node.type === "element") {
+      // If this element is explicitly highlighted (i.e. has highlightIndex)
+      if (typeof node.highlightIndex === "number") {
+        // Build an attributes string (only for keys in includeAttributes)
+        let attrStr = "";
+        if (includeAttributes.length > 0) {
+          const filteredAttrs = Object.entries(node.attributes)
+            .filter(([key]) => includeAttributes.includes(key))
+            .map(([key, value]) => `${key}="${value}"`)
+            .join(" ");
+          if (filteredAttrs.length > 0) {
+            attrStr = " " + filteredAttrs; // prepend a space
+          }
+        }
+
+        // Gather text under this node until another clickable element is found
+        const innerText = getAllTextTillNextClickableElement(node);
+
+        // e.g. "12[:]<button id="myBtn">Some text</button>"
+        lines.push(
+          `${node.highlightIndex}[:]<${node.tagName}${attrStr}>${innerText}</${node.tagName}>`
+        );
+      }
+
+      // Regardless of highlight, process children to find more clickable elements or text
+      if (node.children && node.children.length > 0) {
+        node.children.forEach((child) => processNode(child));
+      }
+    } else if (node.type === "text") {
+      // Only include this text if it doesn't live under a highlighted ancestor
+      // (this matches the "if not node.has_parent_with_highlight_index()" in Python)
+      // if (!hasParentWithHighlightIndex(node)) {
+      // }
+      lines.push(`_[:]${node.text}`);
+    }
+  }
+
+  processNode(rootNode);
+  return lines.join("\n");
+}
+
 // Add fill handler function
-async function handleFill(selector, value) {
+async function handleFill(elementData, value) {
   try {
-    if (!selector || !value) {
-      console.error("No selector or value provided");
+    if (!elementData) {
+      console.error("No element data provided");
       return false;
     }
 
-    const element = findElementBySelector(selector);
+    const element = getLocateElement(elementData);
     if (!element) {
-      console.warn(`Element not found with selector: ${selector}`);
+      console.warn(`Element not found with selector: ${elementData.xpath}`);
       return false;
     }
 
@@ -807,10 +576,41 @@ async function handleFill(selector, value) {
 
     // Type the value character by character
     for (const char of value) {
-      element.value = element.value + char;
+      // Create and dispatch keydown event
+      const keydownEvent = new KeyboardEvent("keydown", {
+        key: char,
+        code: `Key${char.toUpperCase()}`,
+        bubbles: true,
+        cancelable: true,
+      });
+      element.dispatchEvent(keydownEvent);
+
+      // Create and dispatch keypress event
+      const keypressEvent = new KeyboardEvent("keypress", {
+        key: char,
+        code: `Key${char.toUpperCase()}`,
+        bubbles: true,
+        cancelable: true,
+      });
+      element.dispatchEvent(keypressEvent);
+
+      // Append the character to the element's value
+      element.value += char;
+
       // Dispatch input event after each character
       element.dispatchEvent(new Event("input", { bubbles: true }));
-      await new Promise((resolve) => setTimeout(resolve, 50)); // Add slight delay between characters
+
+      // Create and dispatch keyup event
+      const keyupEvent = new KeyboardEvent("keyup", {
+        key: char,
+        code: `Key${char.toUpperCase()}`,
+        bubbles: true,
+        cancelable: true,
+      });
+      element.dispatchEvent(keyupEvent);
+
+      // Add slight delay between characters
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
     // Dispatch change event after filling
@@ -894,7 +694,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return true;
       }
 
-      handleClick(elementData.xpath)
+      handleClick(elementData)
         .then((success) => {
           sendResponse({ success });
         })
@@ -903,11 +703,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ success: false, error: error.message });
         });
     } else if (message.type === "PERFORM_FILL") {
-      console.log("Message.index:", message.index);
-      console.log("Message.index parsed:", parseInt(message.index));
-      console.log("interactiveElementsMap:", interactiveElementsMap);
       const elementData = interactiveElementsMap[parseInt(message.index)];
-      console.log("elementData:", elementData);
       console.log("Attempting to fill element:", {
         requestedIndex: message.index,
         foundElement: elementData,
@@ -921,7 +717,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return true;
       }
 
-      handleFill(elementData.xpath, message.value)
+      handleFill(elementData, message.value)
         .then((success) => {
           sendResponse({ success });
         })
@@ -945,13 +741,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       // First fill the element
-      handleFill(elementData.xpath, message.value)
+      handleClick(elementData);
+      handleFill(elementData, message.value)
         .then(async (success) => {
           if (success) {
             // After filling, send Enter key
             const element = findElementBySelector(elementData.xpath);
             if (element) {
               element.dispatchEvent(new KeyboardEvent('keydown', {
+                key: 'Enter',
+                code: 'Enter',
+                bubbles: true,
+                cancelable: true
+              }));
+              element.dispatchEvent(new KeyboardEvent('keypress', {
+                key: 'Enter',
+                code: 'Enter',
+                bubbles: true,
+                cancelable: true
+              }));
+              element.dispatchEvent(new KeyboardEvent('keyup', {
                 key: 'Enter',
                 code: 'Enter',
                 bubbles: true,
@@ -1039,7 +848,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         } else {
           content = document.body.innerHTML;
         }
-        sendResponse({ success: true, content });
+        sendResponse({ success: true, content: content });
       } catch (error) {
         console.error("Error extracting content:", error);
         sendResponse({ success: false, error: error.message });
@@ -1055,27 +864,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       console.log("Reset interactive elements tracking");
 
       // Build the DOM tree and collect interactive elements
-      buildDomTree(document.body)
-        .then((domTree) => {
-          console.log("DOM Tree:", domTree);
-          const interactiveElements = getInteractiveElementsList(domTree);
-          console.log(
-            `Found interactive elements`
-          );
+      try {
+        doHighlightElements = false;//chrome.storage.local.get({ debug_mode: false });
+        let includeAttributes = [
+          "title",
+          "type",
+          "name",
+          "role",
+          "tabindex",
+          "aria-label",
+          "placeholder",
+          "value",
+          "alt",
+          "aria-expanded",
+        ];
+        const domTree = buildDomTree(document.body);
+        console.log("DOM Tree:", domTree);
+        const interactiveElements = getInteractiveElementsList(domTree);
+        console.log(`Found ${interactiveElementsMap.length} interactive elements`);
 
-          sendResponse({
-            success: true,
-            interactiveElements,
-          });
-        })
-        .catch((error) => {
-          console.error("Error building interactive elements list:", error);
-          sendResponse({
-            success: false,
-            error:
-              "Failed to build interactive elements list: " + error.message,
-          });
+        sendResponse({
+          success: true,
+          stringifiedInteractiveElements: clickableElementsToString(interactiveElements, includeAttributes),
         });
+      } catch (error) {
+        console.error("Error building interactive elements list:", error);
+        sendResponse({
+          success: false,
+          error:
+            "Failed to build interactive elements list: " + error.message,
+        });
+      }
     } else if (message.type === "DEBUG_SCREENSHOT") {
       // Handle debug screenshot display
       const debugOverlay = document.createElement("div");

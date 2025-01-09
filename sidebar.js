@@ -72,7 +72,7 @@ async function debugLog(message) {
   const { debug_mode } = await chrome.storage.local.get({ debug_mode: false });
   if (debug_mode) {
     console.log(message);
-    addMessage(message, true);
+    // addMessage(message, true);
   }
 }
 
@@ -80,6 +80,8 @@ async function debugLog(message) {
 function handlePortMessage(message) {
   if (message.type === "ASSISTANT_MESSAGE") {
     addMessage(message.message, false);
+  } else if (message.type === "DEBUG_SCREENSHOT") {
+    addDebugScreenshot(message.imageUri);
   } else if (message.type === "AI_RESPONSE") {
     if (!message.success) {
       addMessage(`Error: ${message.error || 'Unknown error occurred'}`);
@@ -90,8 +92,6 @@ function handlePortMessage(message) {
       // Parse the AI response
       const clickData = JSON.parse(message.serverResponse.response);
       displayAIResponse(clickData);
-      
-      // Remove the redundant click message - the background script already handles this
     } catch (error) {
       addMessage(`Error: ${error.message}`);
     }
@@ -140,24 +140,35 @@ sendBtn.addEventListener("click", async () => {
 // Function to display debug screenshot
 function addDebugScreenshot(imageUri) {
   debugLog('Adding debug screenshot to sidebar');
+  
+  // Create message container with same styling as chat messages
   const msgEl = document.createElement("div");
-  msgEl.style.margin = "10px 0";
+  msgEl.className = "message assistant-message";
   
-  const img = document.createElement("img");
-  img.src = imageUri;
-  img.style.maxWidth = "100%";
-  img.style.border = "1px solid #ccc";
-  img.style.borderRadius = "4px";
+  // Create content container
+  const contentEl = document.createElement("div");
+  contentEl.className = "message-content";
   
+  // Add label
   const label = document.createElement("div");
   label.textContent = "Debug: Captured Screenshot";
+  label.style.marginBottom = "8px";
   label.style.color = "#666";
   label.style.fontSize = "12px";
-  label.style.marginBottom = "5px";
   
-  msgEl.appendChild(label);
-  msgEl.appendChild(img);
+  // Style the image
+  const img = document.createElement("img");
+  img.src = imageUri;
+  img.className = "debug-screenshot";
+  img.style.display = "block";
+  
+  // Assemble the message
+  contentEl.appendChild(label);
+  contentEl.appendChild(img);
+  msgEl.appendChild(contentEl);
   messagesDiv.appendChild(msgEl);
+  
+  // Scroll to the new message
   messagesDiv.scrollTop = messagesDiv.scrollHeight;
 }
 

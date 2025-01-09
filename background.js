@@ -1,15 +1,3 @@
-// background.js
-
-// Add API key management functions at the top of the file
-async function getOpenAIKey() {
-  const result = await chrome.storage.local.get(['openai_api_key']);
-  return result.openai_api_key;
-}
-
-async function setOpenAIKey(apiKey) {
-  await chrome.storage.local.set({ openai_api_key: apiKey });
-}
-
 // Store active connections
 const ports = new Map();
 
@@ -96,7 +84,7 @@ async function handleScreenshotCapture(prompt, tabId, port = null, previousSteps
     }
 
     // Clean up any extension markup before taking screenshot
-    await cleanupExtensionMarkup(tab.id);
+    // await cleanupExtensionMarkup(tab.id);
 
     // Capture the screenshot
     const screenshotUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
@@ -211,10 +199,12 @@ async function handleScreenshotCapture(prompt, tabId, port = null, previousSteps
         });
       } else if (actionData.action === "extract_content") {
         sendSidebarMessage(port, `Extracting content in ${actionData.format} format`);
-        await chrome.tabs.sendMessage(tabId, {
+        const actionResponse = await chrome.tabs.sendMessage(tabId, {
           type: "EXTRACT_CONTENT",
           format: actionData.format
         });
+        sendSidebarMessage(port, `Extracted content: ${actionResponse.content}`);
+        console.log('Extracted content:', actionResponse.content);
       }
 
       // Wait for the page to fully load and render after the action
@@ -323,13 +313,6 @@ chrome.action.onClicked.addListener(async (tab) => {
 
 // Listen for messages from the content script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.type === "SET_OPENAI_KEY") {
-    setOpenAIKey(request.apiKey)
-      .then(() => sendResponse({ success: true }))
-      .catch((error) => sendResponse({ success: false, error: error.message }));
-    return true;  // Will respond asynchronously
-  }
-
   if (request.type === "CAPTURE_SCREENSHOT") {
     const tabId = request.tabId || sender.tab.id;
     handleScreenshotCapture(request.prompt, tabId, null, [])
@@ -352,199 +335,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 });
-
-// Function to trim DOM tree to reduce size and focus on relevant elements
-function trimDOMTree(tree) {
-  if (!tree) return null;
-
-  // Helper function to process a node
-  function processNode(node) {
-    if (!node) return null;
-
-    // For element nodes
-    if (node.nodeType === 'element') {
-      // Skip script and style elements
-      if (['script', 'style', 'meta', 'link'].includes(node.tagName?.toLowerCase())) {
-        return null;
-      }
-
-      // Create a minimal version of the node
-      const trimmedNode = {
-        nodeType: node.nodeType,
-        xpath: node.xpath,  // Keep xpath for precise identification
-        isInteractive: node.isInteractive  // Keep interactivity flag
-      };
-
-      // Only include minimal identifying attributes
-      if (node.attributes) {
-        const essentialAttrs = ['aria-label', 'role', 'id'];
-        const labelAttrs = Object.entries(node.attributes)
-          .filter(([key, value]) => {
-            // Keep attributes that likely contain identifying text
-            return essentialAttrs.includes(key) ||
-                   key.includes('label') ||
-                   key.includes('text') ||
-                   key.includes('title') ||
-                   key.includes('placeholder');
-          });
-
-        if (labelAttrs.length > 0) {
-          trimmedNode.attributes = Object.fromEntries(labelAttrs);
-        }
-      }
-
-      // Process children recursively
-      if (node.children && node.children.length > 0) {
-        const processedChildren = node.children
-          .map(child => processNode(child))
-          .filter(child => child !== null);
-
-        if (processedChildren.length > 0) {
-          trimmedNode.children = processedChildren;
-        }
-      }
-
-      // Keep text content if it's a leaf node with text
-      if (node.textContent && !trimmedNode.children) {
-        const text = node.textContent.trim();
-        if (text) {
-          trimmedNode.text = text.substring(0, 100); // Limit text length
-        }
-      }
-
-      return trimmedNode;
-    }
-    // For text nodes, only keep if they contain meaningful text
-    else if (node.nodeType === 'text' && node.content) {
-      const text = node.content.trim();
-      if (text) {
-        return {
-          nodeType: 'text',
-          content: text.substring(0, 100) // Limit text length
-        };
-      }
-    }
-    // For document/fragment nodes
-    else if (node.nodeType === 'document' || node.nodeType === 'documentFragment') {
-      const containerNode = {
-        nodeType: node.nodeType,
-        xpath: node.xpath
-      };
-      
-      if (node.children && node.children.length > 0) {
-        const processedChildren = node.children
-          .map(child => processNode(child))
-          .filter(child => child !== null);
-        
-        if (processedChildren.length > 0) {
-          containerNode.children = processedChildren;
-        }
-      }
-      
-      return containerNode;
-    }
-
-    return null;
-  }
-
-  const trimmed = processNode(tree);
-  const originalSize = JSON.stringify(tree).length;
-  const trimmedSize = trimmed ? JSON.stringify(trimmed).length : 0;
-  
-  console.log('Trimming stats:', {
-    originalSize,
-    trimmedSize,
-    reductionPercent: trimmed ? 
-      Math.round((1 - trimmedSize / originalSize) * 100) : 100
-  });
-  
-  return trimmed;
-}
-
-function hasParentWithHighlightIndex(node) {
-  let current = node.parent;
-  while (current) {
-    if (typeof current.highlightIndex === "number") {
-      // If it's an integer or numeric, we treat that as having a highlight
-      return true;
-    }
-    current = current.parent;
-  }
-  return false;
-}
-
-function getAllTextTillNextClickableElement(node) {
-  const textParts = [];
-
-  function collectText(currentNode) {
-    // If we hit a different element that is highlighted, stop recursion down that branch
-    if (
-      currentNode !== node &&
-      currentNode.type === "element" &&
-      typeof currentNode.highlightIndex === "number"
-    ) {
-      return;
-    }
-
-    // If it's a text node, collect its text
-    if (currentNode.type === "text") {
-      textParts.push(currentNode.text);
-    }
-    // If it's an element node, keep recursing into its children
-    else if (currentNode.type === "element" && currentNode.children) {
-      currentNode.children.forEach((child) => collectText(child));
-    }
-  }
-
-  collectText(node);
-  return textParts.join("\n").trim();
-}
-
-function clickableElementsToString(rootNode, includeAttributes = []) {
-  const lines = [];
-
-  function processNode(node) {
-    if (node.type === "element") {
-      // If this element is explicitly highlighted (i.e. has highlightIndex)
-      if (typeof node.highlightIndex === "number") {
-        // Build an attributes string (only for keys in includeAttributes)
-        let attrStr = "";
-        if (includeAttributes.length > 0) {
-          const filteredAttrs = Object.entries(node.attributes)
-            .filter(([key]) => includeAttributes.includes(key))
-            .map(([key, value]) => `${key}="${value}"`)
-            .join(" ");
-          if (filteredAttrs.length > 0) {
-            attrStr = " " + filteredAttrs; // prepend a space
-          }
-        }
-
-        // Gather text under this node until another clickable element is found
-        const innerText = getAllTextTillNextClickableElement(node);
-
-        // e.g. "12[:]<button id="myBtn">Some text</button>"
-        lines.push(
-          `${node.highlightIndex}[:]<${node.tagName}${attrStr}>${innerText}</${node.tagName}>`
-        );
-      }
-
-      // Regardless of highlight, process children to find more clickable elements or text
-      if (node.children && node.children.length > 0) {
-        node.children.forEach((child) => processNode(child));
-      }
-    } else if (node.type === "text") {
-      // Only include this text if it doesn't live under a highlighted ancestor
-      // (this matches the "if not node.has_parent_with_highlight_index()" in Python)
-      if (!hasParentWithHighlightIndex(node)) {
-        lines.push(`_[:]${node.text}`);
-      }
-    }
-  }
-
-  processNode(rootNode);
-  return lines.join("\n");
-}
-
 
 // Function to send prompt + screenshot to AI provider
 async function sendPromptAndScreenshotToServer(prompt, base64Screenshot, previousSteps = []) {
@@ -579,19 +369,6 @@ async function sendPromptAndScreenshotToServer(prompt, base64Screenshot, previou
   console.log('Got active tab:', tab.id);
   
   // Get the interactive elements list
-  let interactiveElements = null;
-  let includeAttributes = [
-    "title",
-    "type",
-    "name",
-    "role",
-    "tabindex",
-    "aria-label",
-    "placeholder",
-    "value",
-    "alt",
-    "aria-expanded"
-  ];
   let stringifiedInteractiveElements = null;
   try {
     console.log('Requesting interactive elements from content script');
@@ -602,15 +379,7 @@ async function sendPromptAndScreenshotToServer(prompt, base64Screenshot, previou
       throw new Error(response.error || 'Failed to get interactive elements');
     }
     
-    interactiveElements = response.interactiveElements;
-    stringifiedInteractiveElements = clickableElementsToString(interactiveElements, includeAttributes);
-    console.log("Interactive Elements:", stringifiedInteractiveElements);
-    // if (!interactiveElements || !Array.isArray(interactiveElements)) {
-    //   console.error('Invalid interactive elements data:', interactiveElements);
-    //   throw new Error('Invalid interactive elements data received from content script');
-    // }
-
-    console.log('All Interactive Elements:', interactiveElements);
+    stringifiedInteractiveElements = response.stringifiedInteractiveElements;
   } catch (error) {
     console.error('Failed to get page data:', error);
     throw new Error('Failed to analyze page structure: ' + error.message);
@@ -828,18 +597,12 @@ async function sendToGemini(prompt, base64Screenshot, apiKey, model, systemPromp
     }
 
     const data = await response.json();
-    console.log('Successfully parsed Gemini response');
+    console.log('Successfully parsed Gemini response', data);
     let content = data.candidates[0].content.parts[0].text;
 
     // Extract JSON from response if wrapped in markdown
     if (content.includes("```json")) {
       content = content.split("```json")[1].split("```")[0].trim();
-    }
-
-    // Validate JSON format focusing on index
-    const parsed = JSON.parse(content);
-    if (typeof parsed.index !== 'number' || !parsed.description) {
-      throw new Error("Invalid response format from Gemini");
     }
 
     return {
