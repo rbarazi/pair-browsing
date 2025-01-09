@@ -353,11 +353,23 @@ async function handleClick(elementData) {
 
 // Add cleanup function
 function cleanupExtensionMarkup() {
-  // Remove cursor element
-  // if (cursorElement) {
-  //   cursorElement.remove();
-  //   cursorElement = null;
-  // }
+  try {
+    // Remove the highlight container and all its contents
+    const container = document.getElementById("playwright-highlight-container");
+    if (container) {
+      container.remove();
+    }
+
+    // Remove highlight attributes from elements
+    const highlightedElements = document.querySelectorAll(
+      '[browser-user-highlight-id^="playwright-highlight-"]'
+    );
+    highlightedElements.forEach((el) => {
+      el.removeAttribute("browser-user-highlight-id");
+    });
+  } catch (e) {
+    console.error("Failed to remove highlights:", e);
+  }
 
   // Remove any highlight overlays
   const overlays = document.querySelectorAll(
@@ -887,7 +899,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       // Build the DOM tree and collect interactive elements
       try {
-        doHighlightElements = false;//chrome.storage.local.get({ debug_mode: false });
+        doHighlightElements = message.highlightElements || false;
         let includeAttributes = [
           "title",
           "type",

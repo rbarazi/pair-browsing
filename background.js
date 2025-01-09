@@ -89,13 +89,13 @@ class ScreenshotManager {
     if (!tab) {
       throw new Error('Tab not found');
     }
-
-    // Clean up any extension markup before taking screenshot
-    await cleanupExtensionMarkup(tab.id);
-
+    
     // Capture the screenshot
     const screenshotUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
     console.log('Screenshot captured successfully');
+
+    // Clean up any extension markup after taking screenshot
+    await cleanupExtensionMarkup(tab.id);
     
     return screenshotUrl;
   }
@@ -129,12 +129,16 @@ async function handleScreenshotCapture(prompt, tabId, port = null, previousSteps
   await screenshotManager.initialize();
 
   try {
+    // Get interactive elements
+    const stringifiedInteractiveElements = await getInteractiveElements(tabId);
+
     // Capture screenshot
     const screenshotUrl = await screenshotManager.captureScreenshot(tabId);
     await screenshotManager.sendDebugScreenshot(tabId, port, screenshotUrl);
     
+
     // Send to AI service
-    const response = await sendPromptAndScreenshotToServer(prompt, screenshotUrl, previousSteps);
+    const response = await sendPromptAndScreenshotToServer(prompt, screenshotUrl, previousSteps, stringifiedInteractiveElements);
     console.log('AI service response received:', {
       success: response.success,
       response: response.response,
@@ -272,7 +276,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 // Function to send prompt + screenshot to AI provider
-async function sendPromptAndScreenshotToServer(prompt, base64Screenshot, previousSteps = []) {
+async function sendPromptAndScreenshotToServer(prompt, base64Screenshot, previousSteps = [], stringifiedInteractiveElements = null) {
   console.log('Starting AI service request with prompt:', prompt);
   
   // Get provider and settings from storage
@@ -303,23 +307,6 @@ async function sendPromptAndScreenshotToServer(prompt, base64Screenshot, previou
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   console.log('Got active tab:', tab.id);
   
-  // Get the interactive elements list
-  let stringifiedInteractiveElements = null;
-  try {
-    console.log('Requesting interactive elements from content script');
-    const response = await chrome.tabs.sendMessage(tab.id, { type: "GET_PAGE_MARKUP" });
-    
-    if (!response.success) {
-      console.error('Failed to get interactive elements:', response.error);
-      throw new Error(response.error || 'Failed to get interactive elements');
-    }
-    
-    stringifiedInteractiveElements = response.stringifiedInteractiveElements;
-  } catch (error) {
-    console.error('Failed to get page data:', error);
-    throw new Error('Failed to analyze page structure: ' + error.message);
-  }
-
   // Format previous steps for the prompt
   const stepsHistory = previousSteps.length > 0 
     ? previousSteps.map((step, index) => `${index + 1}. ${step}`).join('\n')
@@ -700,6 +687,23 @@ class StepManager {
     
     // Recursively call handleScreenshotCapture with the combined prompt and updated steps
     return await handleScreenshotCapture(combinedPrompt, this.tabId, this.port, updatedSteps);
+  }
+}
+
+async function getInteractiveElements(tabId) {
+  try {
+    console.log('Requesting interactive elements from content script');
+    const response = await chrome.tabs.sendMessage(tabId, { type: "GET_PAGE_MARKUP", highlightElements: true });
+    
+    if (!response.success) {
+      console.error('Failed to get interactive elements:', response.error);
+      throw new Error(response.error || 'Failed to get interactive elements');
+    }
+    
+    return response.stringifiedInteractiveElements;
+  } catch (error) {
+    console.error('Failed to get page data:', error);
+    throw new Error('Failed to analyze page structure: ' + error.message);
   }
 }
 
