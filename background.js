@@ -14,8 +14,11 @@ async function setOpenAIKey(apiKey) {
 const ports = new Map();
 
 // Helper function to send messages to sidebar
-function sendSidebarMessage(port, message) {
-  if (port) {
+async function sendSidebarMessage(port, message) {
+  // Get debug mode setting
+  const { debug_mode } = await chrome.storage.local.get({ debug_mode: false });
+
+  if (port && debug_mode) {
     port.postMessage({
       type: "ASSISTANT_MESSAGE",
       message
@@ -458,6 +461,91 @@ function trimDOMTree(tree) {
   return trimmed;
 }
 
+function hasParentWithHighlightIndex(node) {
+  let current = node.parent;
+  while (current) {
+    if (typeof current.highlightIndex === "number") {
+      // If it's an integer or numeric, we treat that as having a highlight
+      return true;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
+function getAllTextTillNextClickableElement(node) {
+  const textParts = [];
+
+  function collectText(currentNode) {
+    // If we hit a different element that is highlighted, stop recursion down that branch
+    if (
+      currentNode !== node &&
+      currentNode.type === "element" &&
+      typeof currentNode.highlightIndex === "number"
+    ) {
+      return;
+    }
+
+    // If it's a text node, collect its text
+    if (currentNode.type === "text") {
+      textParts.push(currentNode.text);
+    }
+    // If it's an element node, keep recursing into its children
+    else if (currentNode.type === "element" && currentNode.children) {
+      currentNode.children.forEach((child) => collectText(child));
+    }
+  }
+
+  collectText(node);
+  return textParts.join("\n").trim();
+}
+
+function clickableElementsToString(rootNode, includeAttributes = []) {
+  const lines = [];
+
+  function processNode(node) {
+    if (node.type === "element") {
+      // If this element is explicitly highlighted (i.e. has highlightIndex)
+      if (typeof node.highlightIndex === "number") {
+        // Build an attributes string (only for keys in includeAttributes)
+        let attrStr = "";
+        if (includeAttributes.length > 0) {
+          const filteredAttrs = Object.entries(node.attributes)
+            .filter(([key]) => includeAttributes.includes(key))
+            .map(([key, value]) => `${key}="${value}"`)
+            .join(" ");
+          if (filteredAttrs.length > 0) {
+            attrStr = " " + filteredAttrs; // prepend a space
+          }
+        }
+
+        // Gather text under this node until another clickable element is found
+        const innerText = getAllTextTillNextClickableElement(node);
+
+        // e.g. "12[:]<button id="myBtn">Some text</button>"
+        lines.push(
+          `${node.highlightIndex}[:]<${node.tagName}${attrStr}>${innerText}</${node.tagName}>`
+        );
+      }
+
+      // Regardless of highlight, process children to find more clickable elements or text
+      if (node.children && node.children.length > 0) {
+        node.children.forEach((child) => processNode(child));
+      }
+    } else if (node.type === "text") {
+      // Only include this text if it doesn't live under a highlighted ancestor
+      // (this matches the "if not node.has_parent_with_highlight_index()" in Python)
+      if (!hasParentWithHighlightIndex(node)) {
+        lines.push(`_[:]${node.text}`);
+      }
+    }
+  }
+
+  processNode(rootNode);
+  return lines.join("\n");
+}
+
+
 // Function to send prompt + screenshot to AI provider
 async function sendPromptAndScreenshotToServer(prompt, base64Screenshot, previousSteps = []) {
   console.log('Starting AI service request with prompt:', prompt);
@@ -492,6 +580,19 @@ async function sendPromptAndScreenshotToServer(prompt, base64Screenshot, previou
   
   // Get the interactive elements list
   let interactiveElements = null;
+  let includeAttributes = [
+    "title",
+    "type",
+    "name",
+    "role",
+    "tabindex",
+    "aria-label",
+    "placeholder",
+    "value",
+    "alt",
+    "aria-expanded"
+  ];
+  let stringifiedInteractiveElements = null;
   try {
     console.log('Requesting interactive elements from content script');
     const response = await chrome.tabs.sendMessage(tab.id, { type: "GET_PAGE_MARKUP" });
@@ -502,10 +603,12 @@ async function sendPromptAndScreenshotToServer(prompt, base64Screenshot, previou
     }
     
     interactiveElements = response.interactiveElements;
-    if (!interactiveElements || !Array.isArray(interactiveElements)) {
-      console.error('Invalid interactive elements data:', interactiveElements);
-      throw new Error('Invalid interactive elements data received from content script');
-    }
+    stringifiedInteractiveElements = clickableElementsToString(interactiveElements, includeAttributes);
+    console.log("Interactive Elements:", stringifiedInteractiveElements);
+    // if (!interactiveElements || !Array.isArray(interactiveElements)) {
+    //   console.error('Invalid interactive elements data:', interactiveElements);
+    //   throw new Error('Invalid interactive elements data received from content script');
+    // }
 
     console.log('All Interactive Elements:', interactiveElements);
   } catch (error) {
@@ -514,64 +617,21 @@ async function sendPromptAndScreenshotToServer(prompt, base64Screenshot, previou
   }
 
   // Format previous steps for the prompt
-  const isFirstTime = previousSteps.length === 0;
   const stepsHistory = previousSteps.length > 0 
     ? previousSteps.map((step, index) => `${index + 1}. ${step}`).join('\n')
     : 'No previous steps.';
 
   // Add first-time instructions if this is the first interaction
-  const stepInstructions = isFirstTime
-    ? `
-Think through the user's request and identify if you need more than one step to accomplish it. If you need more than one step you must use the 'next_prompt' action to prompt the next step in your sequence.
-
-`
-    : `
-You thought through the user's request and identified that you need more than one step to accomplish it.
-You performed the following steps so far: 
-${stepsHistory}
-You must use the 'next_prompt' action to prompt the next step in your sequence.
-`;
+  const stepInstructions = `Previous Steps: 
+${stepsHistory}`;
 
   // Add interactive elements to the prompt
   const enhancedPrompt = `
-The user's original request is: ${prompt}
-
+User Request: ${prompt}
 ${stepInstructions}
-
-After executing your last action, a screenshot of the page is attached. The page contains the following list of interactive elements, each with a unique index:
-
-\`\`\`json
-${JSON.stringify(interactiveElements, null, 2)}
-\`\`\`
-
-Based on these elements and the screenshot, determine if the user's request is complete. If not, determine the appropriate action to take. Available actions:
-
-1. Click: Click on an interactive element by index
-2. Fill: Input text into a form field by index
-3. Fill and Submit: Input text into a form field by index and submit with Enter. This is perfect for filling a single field form like search bars or passwords.
-4. Search Google: Search Google in the current tab
-5. Navigate: Go to URLs or go back in history
-6. Scroll: Scroll the page up or down
-7. Send Keys: Send keyboard inputs to the active element
-8. Extract Content: Get page content as text or markdown
-
-Respond with a JSON object containing:
-{
-  "action": "The type of action to perform (click, fill, fill_and_submit, search_google, go_to_url, go_back, scroll_down, scroll_up, send_keys, extract_content)",
-  "index": "The index number of the element to interact with (for click, fill, and fill_and_submit)",
-  "description": "A clear description of what will be done",
-  "value": "The value to fill (for fill and fill_and_submit actions)",
-  "query": "The search query (for search_google action)",
-  "url": "The URL to navigate to (for go_to_url action)",
-  "amount": "The scroll amount in pixels (optional for scroll actions)",
-  "keys": "The keys to send (for send_keys action)",
-  "format": "The output format for extract_content (text or markdown)",
-  "next_prompt": "The next action to perform if any (optional)"
-}
-
-Choose the most appropriate action based to complete the user's request.
-
-If you expect that the user's request requires a followup step, prepare a prompt for yourself and include it in the JSON object as "next_prompt"; otherwise, if the request is complete, don't include it.`;
+Interactive elements:
+${stringifiedInteractiveElements}
+`;
 
   console.log('Enhanced prompt built, sending to AI service');
   let response;
@@ -579,11 +639,19 @@ If you expect that the user's request requires a followup step, prepare a prompt
     if (provider === 'openai') {
       console.log('Sending to OpenAI');
       response = await sendToOpenAI(enhancedPrompt, base64Screenshot, openai_api_key, openai_model, system_prompt);
-      console.log('Received response from OpenAI:', response);
+      console.log('OpenAI Response:', {
+        success: response.success,
+        responseContent: response.response,
+        parsedResponse: JSON.parse(response.response)
+      });
     } else {
       console.log('Sending to Gemini');
       response = await sendToGemini(enhancedPrompt, base64Screenshot, gemini_api_key, gemini_model, system_prompt);
-      console.log('Received response from Gemini:', response);
+      console.log('Gemini Response:', {
+        success: response.success,
+        responseContent: response.response,
+        parsedResponse: JSON.parse(response.response)
+      });
     }
   } catch (error) {
     console.error('AI service error:', error);
