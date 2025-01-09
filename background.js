@@ -633,6 +633,7 @@ Interactive elements:
 ${stringifiedInteractiveElements}
 `;
 
+  console.log('Enhanced prompt:', enhancedPrompt);
   console.log('Enhanced prompt built, sending to AI service');
   let response;
   try {

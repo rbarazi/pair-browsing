@@ -1147,7 +1147,9 @@ function updateCursor(x, y) {
       pointerEvents: "none",
       userSelect: "none",
     });
-    label.textContent = "AI Assistant";
+    chrome.storage.local.get({ cursor_label: 'AI Assistant' }, (items) => {
+      label.textContent = items.cursor_label;
+    });
 
     cursorElement.appendChild(pointer);
     cursorElement.appendChild(label);

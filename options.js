@@ -8,6 +8,7 @@ function saveOptions() {
   const systemPrompt = document.getElementById('systemPrompt').value;
   const debugMode = document.getElementById('debugMode').checked;
   const agentMode = document.getElementById('agentMode').checked;
+  const cursorLabel = document.getElementById('cursorLabel').value;
 
   chrome.storage.local.set(
     {
@@ -19,6 +20,7 @@ function saveOptions() {
       system_prompt: systemPrompt,
       debug_mode: debugMode,
       agent_mode: agentMode,
+      cursor_label: cursorLabel || 'AI Assistant',
     },
     () => {
       const status = document.getElementById('status');
@@ -52,7 +54,7 @@ function restoreOptions() {
 Functions:
 1. click: Click on an interactive element by index
 2. fill: Input text into a form field by index
-3. fill_and_submit: Input text into a form field by index and submit with Enter. This is perfect for filling a single field form like search bars or passwords.
+3. fill_and_submit: Input text into a form field by index and submit with Enter. This is perfect for filling a single field form like search bars.
 4. search_google: Search Google in the current tab
 5. go_to_url: Navigate to URLs or go back in history
 6. scroll_down: Scroll the page down
@@ -134,6 +136,7 @@ Remember: Your responses must be valid JSON matching the specified format. Each 
 `,
       debug_mode: false,
       agent_mode: false,
+      cursor_label: 'AI Assistant',
     },
     (items) => {
       document.getElementById("provider").value = items.provider;
@@ -144,6 +147,7 @@ Remember: Your responses must be valid JSON matching the specified format. Each 
       document.getElementById("systemPrompt").value = items.system_prompt;
       document.getElementById("debugMode").checked = items.debug_mode;
       document.getElementById("agentMode").checked = items.agent_mode;
+      document.getElementById('cursorLabel').value = items.cursor_label;
       updateVisibility();
     }
   );
