@@ -14,6 +14,53 @@ async function sendSidebarMessage(port, message) {
   }
 }
 
+// Clear AI conversation history
+async function clearAIHistory() {
+  await chrome.storage.local.set({ aiHistory: [] });
+  console.log('AI conversation history cleared');
+}
+
+// Update conversation history
+async function updateHistory(newEntry) {
+  try {
+    // Get existing history
+    const { aiHistory = [] } = await chrome.storage.local.get('aiHistory');
+    
+    // Add new entry
+    aiHistory.push(newEntry);
+    
+    // Save updated history
+    await chrome.storage.local.set({ aiHistory: aiHistory });
+    
+    console.log('History updated:', newEntry);
+  } catch (error) {
+    console.error('Failed to update history:', error);
+  }
+}
+// Reset session state
+async function resetSession(port, tabId) {
+  // Clear conversation history
+  clearAIHistory();
+  
+  // Reinitialize cursor
+  if (tabId) {
+    try {
+      await chrome.tabs.sendMessage(tabId, { type: "INIT_CURSOR" });
+      console.log('Cursor reinitialized');
+    } catch (error) {
+      console.warn('Failed to reinitialize cursor:', error);
+    }
+  }
+  
+  // Notify sidebar that reset is complete
+  port.postMessage({
+    type: "SESSION_RESET",
+    success: true
+  });
+  
+  console.log('Session reset complete');
+}
+
 // Function to clean up extension markup before screenshot
 async function cleanupExtensionMarkup(tabId) {
   try {
@@ -135,22 +182,23 @@ async function promptAI(prompt, tabId, port = null, previousSteps = []) {
     // Capture screenshot
     const screenshotUrl = await screenshotManager.captureScreenshot(tabId);
     await screenshotManager.sendDebugScreenshot(tabId, port, screenshotUrl);
-    
-    // Send to AI service
-    const response = await sendPromptAndScreenshotToServer(prompt, screenshotUrl, previousSteps, stringifiedInteractiveElements);
+
+    const response = await sendPromptAndScreenshotToServer(prompt, screenshotUrl, stringifiedInteractiveElements);
     console.log('AI service response received:', {
       success: response.success,
       response: response.response,
       parsedResponse: response.success ? JSON.parse(response.response) : null
     });
-    
-    // Send the response to the content script for handling
+
     if (response.success) {
       const responseData = JSON.parse(response.response);
+      await updateHistory({ role: "assistant", content: response.response });
+
       console.log('Parsed response data:', responseData);
       
+      const state = responseData.current_state;
       // Send initial task description to sidebar
-      sendSidebarMessage(port, `Task: ${responseData.description}, steps: ${responseData.actions.length}`);
+      sendSidebarMessage(port, `Task: ${state.next_goal}, steps: ${responseData.actions.length}`);
       
       // Create action handler instance
       const actionHandler = new ActionHandler(tabId, port);
@@ -170,9 +218,9 @@ async function promptAI(prompt, tabId, port = null, previousSteps = []) {
       const nextResult = await stepManager.handleNextStep(responseData, prompt, previousSteps);
       if (nextResult) {
         return nextResult;
-      }
+      }     
     }
-    
+
     return { success: true, response };
   } catch (error) {
     console.error('Error handling screenshot capture:', error);
@@ -183,6 +231,9 @@ async function promptAI(prompt, tabId, port = null, previousSteps = []) {
 // Handle connection from sidebar
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === "sidebar") {
+    // Clear history at the start of new session
+    resetSession(port, null);
+    
     // Store the port with a unique ID
     const portId = Date.now().toString();
     ports.set(portId, port);
@@ -218,6 +269,8 @@ chrome.runtime.onConnect.addListener((port) => {
           serverResponse: result.success ? result.response : undefined,
           error: result.success ? undefined : result.error,
         });
+      } else if (message.type === "RESET_SESSION") {
+        await resetSession(port, message.tabId);
       }
     });
   }
@@ -274,74 +327,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 // Function to send prompt + screenshot to AI provider
-async function sendPromptAndScreenshotToServer(prompt, base64Screenshot, previousSteps = [], stringifiedInteractiveElements = null) {
+async function sendPromptAndScreenshotToServer(prompt, base64Screenshot, stringifiedInteractiveElements = null) {
   console.log('Starting AI service request with prompt:', prompt);
   
   // Get provider and settings from storage
-  const { 
-    provider,
-    openai_api_key,
-    openai_model,
-    gemini_api_key,
-    gemini_model,
-    system_prompt 
-  } = await chrome.storage.local.get({
-    provider: 'openai',
-    openai_api_key: '',
-    openai_model: 'gpt-4o-min',
-    gemini_api_key: '',
-    gemini_model: 'gemini-2.0-flash-exp',
-    system_prompt: `You are a precise browser automation agent that interacts with websites through structured commands. Your role is to:
-1. Analyze the provided webpage elements and structure
-2. Plan a sequence of actions to accomplish the given task
-3. Respond with valid JSON containing your action sequence and state assessment
-4. Support both click and fill actions for form interactions`
-  });
+  const { provider } = await chrome.storage.local.get({ provider: 'openai' });
 
-  console.log('Using AI provider:', provider);
-  console.log('Using model:', provider === 'openai' ? openai_model : gemini_model);
+  updateHistory({ role: 'user', content: prompt, elements: stringifiedInteractiveElements, screenshot: base64Screenshot });
 
-  // Get the active tab
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  console.log('Got active tab:', tab.id);
-  
-  // Format previous steps for the prompt
-  const stepsHistory = previousSteps.length > 0 
-    ? previousSteps.map((step, index) => `${index + 1}. ${step}`).join('\n')
-    : 'No previous steps.';
-
-  // Add first-time instructions if this is the first interaction
-  const stepInstructions = `Previous Steps: 
-${stepsHistory}`;
-
-  // Add interactive elements to the prompt
-  const enhancedPrompt = `
-User Request: ${prompt}
-${stepInstructions}
-Interactive elements:
-${stringifiedInteractiveElements}
-`;
-
-  console.log('Enhanced prompt:', enhancedPrompt);
-  console.log('Enhanced prompt built, sending to AI service');
   let response;
   try {
     if (provider === 'openai') {
-      console.log('Sending to OpenAI');
-      response = await sendToOpenAI(enhancedPrompt, base64Screenshot, openai_api_key, openai_model, system_prompt);
-      console.log('OpenAI Response:', {
-        success: response.success,
-        responseContent: response.response,
-        parsedResponse: JSON.parse(response.response)
-      });
+      response = await sendToOpenAI();
+      console.log('OpenAI Response:', response);
     } else {
-      console.log('Sending to Gemini');
-      response = await sendToGemini(enhancedPrompt, base64Screenshot, gemini_api_key, gemini_model, system_prompt);
-      console.log('Gemini Response:', {
-        success: response.success,
-        responseContent: response.response,
-        parsedResponse: JSON.parse(response.response)
-      });
+      response = await sendToGemini();
+      console.log('Gemini Response:', response);
     }
   } catch (error) {
     console.error('AI service error:', error);
@@ -355,9 +356,25 @@ ${stringifiedInteractiveElements}
 const BROWSER_AUTOMATION_SCHEMA = {
   type: "object",
   properties: {
-    description: {
-      type: "string",
-      description: "Clear description of the overall task or goal"
+    current_state: {
+      type: "object",
+      properties: {
+        evaluation_previous_goal: {
+          type: "string",
+          description:
+            "Success|Failed|Unknown - Analyze the current elements and the image to check if the previous goals/actions are successful like intended by the task. Ignore the action result. The website is the ground truth. Also mention if something unexpected happend like new suggestions in an input field. Shortly state why/why not",
+        },
+        memory: {
+          type: "string",
+          description:
+            "Description of what has been done and what you need to remember until the end of the task",
+        },
+        next_goal: {
+          type: "string",
+          description: "What needs to be done with the next actions",
+        },
+      },
+      required: ["evaluation_previous_goal"],
     },
     actions: {
       type: "array",
@@ -367,146 +384,220 @@ const BROWSER_AUTOMATION_SCHEMA = {
         properties: {
           action: {
             type: "string",
-            enum: ["click", "fill", "fill_and_submit", "search_google", "go_to_url", "go_back", "scroll_down", "scroll_up", "send_keys", "extract_content"],
-            description: "The type of action to perform"
-          },
-          index: {
-            type: "number",
-            description: "The index number of the interactive element to interact with (required for click and fill actions)"
-          },
-          value: {
-            type: "string",
-            description: "The value to fill in the element (required for fill action)"
+            enum: [
+              "click",
+              "fill",
+              "search_google",
+              "go_to_url",
+              "go_back",
+              "scroll_down",
+              "scroll_up",
+              "send_keys",
+              "extract_content",
+            ],
+            description: "The type of action to perform",
           },
           description: {
             type: "string",
-            description: "Clear description of what this specific action will do"
+            description:
+              "Clear description of what this specific action will do",
+          },
+          index: {
+            type: "number",
+            description:
+              "The index number of the interactive element to interact with (required for click and fill actions)",
+          },
+          value: {
+            type: "string",
+            description:
+              "The value to fill in the element (required for fill action)",
           },
           query: {
             type: "string",
-            description: "The search query (required for search_google action)"
+            description: "The search query (required for search_google action)",
           },
           url: {
             type: "string",
-            description: "The URL to navigate to (required for go_to_url action)"
+            description:
+              "The URL to navigate to (required for go_to_url action)",
           },
           amount: {
             type: "number",
-            description: "The scroll amount in pixels (optional for scroll actions)"
+            description:
+              "The scroll amount in pixels (optional for scroll actions)",
           },
           keys: {
             type: "string",
-            description: "The keys to send (required for send_keys action)"
+            description: "The keys to send (required for send_keys action)",
           },
           format: {
             type: "string",
             enum: ["text", "markdown", "html"],
-            description: "The output format (required for extract_content action)"
-          }
+            description:
+              "The output format (required for extract_content action)",
+          },
         },
-        required: ["action", "description"]
-      }
-    }
+        required: ["action", "description"],
+      },
+    },
   },
-  required: ["description", "actions"]
+  required: ["current_state", "actions"],
 };
 
 // Update the OpenAI schema
-async function sendToOpenAI(prompt, base64Screenshot, apiKey, model, systemPrompt) {
-  console.log('Preparing OpenAI request');
-  if (!apiKey) {
-    throw new Error("OpenAI API key not set. Please set your API key in the extension options.");
+async function sendToOpenAI() {
+  // Get provider and settings from storage
+  const {
+    openai_api_key,
+    openai_model,
+    system_prompt,
+  } = await chrome.storage.local.get({
+    openai_api_key: "",
+    openai_model: "gpt-4o-min",
+    system_prompt: "",
+  });
+
+  console.log("Preparing OpenAI request");
+  if (!openai_api_key) {
+    throw new Error(
+      "OpenAI API key not set. Please set your API key in the extension options."
+    );
   }
+
+  // get all the messages from history and loop through them, updating the user messages with a screenshot to have an array of content objects, one `text` and one `image_url`
+  const { aiHistory = [] } = await chrome.storage.local.get("aiHistory");
+  const messages = aiHistory.map(message => {
+    if (message.role === 'user') {
+      // Add interactive elements to the prompt
+      const enhancedPrompt = `
+Your task is: ${message.content}
+Interactive elements:
+${message.elements}
+`;
+      return {
+        role: "user",
+        content: [
+          { type: "text", text: enhancedPrompt },
+          { type: "image_url", image_url: { url: message.screenshot } },
+        ],
+      };
+    } else if (message.role === 'assistant') {
+      return {
+        role: "assistant",
+        content: [{ type: 'text', text: message.content }]
+      };
+    }
+    return message;
+  });
 
   const OPENAI_API_ENDPOINT = "https://api.openai.com/v1/chat/completions";
   const requestBody = {
-    model: model,
+    model: openai_model,
     messages: [
       {
         role: "system",
-        content: systemPrompt
+        content: system_prompt,
       },
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: prompt
-          },
-          {
-            type: "image_url",
-            image_url: {
-              url: base64Screenshot
-            }
-          }
-        ]
-      }
+      ...messages,
     ],
     max_tokens: 1000,
     response_format: {
       type: "json_schema",
       json_schema: {
         name: "browser_automation_sequence",
-        description: "Structured response for a sequence of browser automation actions",
-        schema: BROWSER_AUTOMATION_SCHEMA
-      }
-    }
+        description:
+          "Structured response for a sequence of browser automation actions",
+        schema: BROWSER_AUTOMATION_SCHEMA,
+      },
+    },
   };
 
-  console.log('Sending request to OpenAI API');
+  console.log("Sending request to OpenAI API");
   const response = await fetch(OPENAI_API_ENDPOINT, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`
+      Authorization: `Bearer ${openai_api_key}`,
     },
-    body: JSON.stringify(requestBody)
+    body: JSON.stringify(requestBody),
   });
 
-  console.log('Received response from OpenAI API');
+  console.log("Received response from OpenAI API");
   if (!response.ok) {
     const errorData = await response.json().catch(() => null);
-    console.error('OpenAI API error:', errorData);
-    throw new Error(`OpenAI API error: ${response.statusText}${errorData ? ' - ' + JSON.stringify(errorData) : ''}`);
+    console.error("OpenAI API error:", errorData);
+    throw new Error(
+      `OpenAI API error: ${response.statusText}${
+        errorData ? " - " + JSON.stringify(errorData) : ""
+      }`
+    );
   }
 
   const data = await response.json();
-  console.log('Successfully parsed OpenAI response');
+  console.log("Successfully parsed OpenAI response");
   return {
     response: data.choices[0].message.content,
-    success: true
+    success: true,
   };
 }
 
 // Update Gemini validation
-async function sendToGemini(prompt, base64Screenshot, apiKey, model, systemPrompt) {
+async function sendToGemini() {
+  const {
+    gemini_api_key,
+    gemini_model,
+    system_prompt,
+  } = await chrome.storage.local.get({
+    gemini_api_key: "",
+    gemini_model: "gemini-2.0-flash-exp",
+    system_prompt: "",
+  });
+
   console.log('Preparing Gemini request');
-  if (!apiKey) {
+  if (!gemini_api_key) {
     throw new Error("Gemini API key not set. Please set your API key in the extension options.");
   }
 
   try {
-    const GEMINI_API_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    const GEMINI_API_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${gemini_model}:generateContent?key=${gemini_api_key}`;
 
-    // Prepare the prompt with system instructions and user query
-    const fullPrompt = `${systemPrompt}\n\n${prompt}`;
+    const { aiHistory = [] } = await chrome.storage.local.get("aiHistory");
+    const messages = aiHistory.map(message => {
+      if (message.role === 'user') {
+        const enhancedPrompt = `
+Your task is: ${message.content}
+Interactive elements:
+${message.elements}
+`;
+        return {
+          role: "user",
+          parts: [
+            { text: enhancedPrompt }, 
+            {
+              inline_data: {
+                mime_type: "image/png",
+                data: message.screenshot.replace(/^data:image\/[a-z]+;base64,/, "")
+              }
+            }
+          ]
+        };
+      } else if (message.role === 'assistant') {
+        return {
+          role: "model",
+          parts: [{ text: message.content }]
+        };
+      }
+      return message;
+    });
 
     // Create the request body
     const requestBody = {
-      contents: [{
-        role: "user",
-        parts: [
-          {
-            text: fullPrompt
-          },
-          {
-            inlineData: {
-              mimeType: "image/png",
-              data: base64Screenshot.replace(/^data:image\/[a-z]+;base64,/, "")
-            }
-          }
-        ]
-      }],
+      system_instruction: {
+        parts:{
+          text: system_prompt
+        }
+      },
+      contents: [messages],
       generationConfig: {
         temperature: 0.4,
         topK: 40,
@@ -562,7 +653,6 @@ class ActionHandler {
     const actionMap = {
       click: this.handleClick.bind(this),
       fill: this.handleFill.bind(this),
-      fill_and_submit: this.handleFillAndSubmit.bind(this),
       search_google: this.handleSearchGoogle.bind(this),
       go_to_url: this.handleGoToUrl.bind(this),
       go_back: this.handleGoBack.bind(this),
@@ -592,19 +682,6 @@ class ActionHandler {
     sendSidebarMessage(this.port, `Filling form field at index ${index}`);
     await chrome.tabs.sendMessage(this.tabId, {
       type: "PERFORM_FILL",
-      index,
-      value
-    });
-  }
-
-  async handleFillAndSubmit({ index, value }) {
-    sendSidebarMessage(this.port, `Filling form field at index ${index} and submitting`);
-    await chrome.tabs.sendMessage(this.tabId, {
-      type: "PERFORM_CLICK",
-      index
-    });
-    await chrome.tabs.sendMessage(this.tabId, {
-      type: "PERFORM_FILL_AND_SUBMIT",
       index,
       value
     });

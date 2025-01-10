@@ -1,6 +1,8 @@
 // sidebar.js
 
 const sendBtn = document.getElementById("sendBtn");
+const resetBtn = document.getElementById("resetBtn");
+const optionsBtn = document.getElementById("optionsBtn");
 const promptInput = document.getElementById("prompt");
 const messagesDiv = document.getElementById("messages");
 
@@ -175,7 +177,7 @@ function addDebugScreenshot(imageUri) {
 // Parse and display AI response
 function displayAIResponse(clickData) {
   // Display the main action description
-  addMessage(`Assistant: ${clickData.description}`);
+  addMessage(`Assistant: "${clickData.action}"`);
 
   // Display additional details based on action type
   switch (clickData.action) {
@@ -184,9 +186,6 @@ function displayAIResponse(clickData) {
       break;
     case "fill":
       addMessage(`Action: Filling form field at index ${clickData.index} with "${clickData.value}"`);
-      break;
-    case "fill_and_submit":
-      addMessage(`Action: Filling form field at index ${clickData.index} with "${clickData.value}" and submitting`);
       break;
     case "search_google":
       addMessage(`Action: Searching Google for "${clickData.query}"`);
@@ -227,6 +226,40 @@ promptInput.addEventListener("keydown", async (e) => {
       sendBtn.click();
     }
   }
+});
+
+// Reset button handler
+resetBtn.addEventListener("click", async () => {
+  // Clear the messages div
+  messagesDiv.innerHTML = '';
+  
+  try {
+    // Get the current active tab
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab) {
+      throw new Error('No active tab found');
+    }
+    
+    // Ensure we have a connection
+    if (!await ensureConnection()) {
+      throw new Error('Failed to establish connection to background script');
+    }
+    
+    // Send reset message to background
+    port.postMessage({
+      type: "RESET_SESSION",
+      tabId: tab.id
+    });
+    
+    addMessage("Session reset", false);
+  } catch (error) {
+    addMessage(`Error resetting session: ${error.message}`, false);
+  }
+});
+
+// Options button handler
+optionsBtn.addEventListener("click", () => {
+  chrome.runtime.openOptionsPage();
 });
 
 // Initialize connection when the script loads

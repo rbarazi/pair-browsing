@@ -757,64 +757,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           console.error("Error performing fill:", error);
           sendResponse({ success: false, error: error.message });
         });
-    } else if (message.type === "PERFORM_FILL_AND_SUBMIT") {
-      const elementData = interactiveElementsMap[parseInt(message.index)];
-      console.log("Attempting to fill and submit element:", {
-        requestedIndex: message.index,
-        foundElement: elementData,
-        value: message.value,
-      });
-      if (!elementData) {
-        sendResponse({
-          success: false,
-          error: `No element found with index: ${message.index}`,
-        });
-        return true;
-      }
-
-      // First fill the element
-      handleClick(elementData);
-      handleFill(elementData, message.value)
-        .then(async (success) => {
-          if (success) {
-            // After filling, send Enter key
-            const element = findElementBySelector(elementData.xpath);
-            if (element) {
-              element.dispatchEvent(new KeyboardEvent('keydown', {
-                key: 'Enter',
-                code: 'Enter',
-                bubbles: true,
-                composed: true,
-                cancelable: true
-              }));
-              element.dispatchEvent(new KeyboardEvent('keypress', {
-                key: 'Enter',
-                code: 'Enter',
-                bubbles: true,
-                cancelable: true,
-                composed: true
-              }));
-              element.dispatchEvent(new KeyboardEvent('keyup', {
-                key: 'Enter',
-                code: 'Enter',
-                bubbles: true,
-                cancelable: true,
-                composed: true
-              }));
-              element.dispatchEvent(
-                new Event("submit", { bubbles: true, composed: true })
-              );
-
-            }
-            sendResponse({ success: true });
-          } else {
-            sendResponse({ success: false, error: "Failed to fill element" });
-          }
-        })
-        .catch((error) => {
-          console.error("Error performing fill and submit:", error);
-          sendResponse({ success: false, error: error.message });
-        });
     } else if (message.type === "SEARCH_GOOGLE") {
       window.location.href = `https://www.google.com/search?q=${encodeURIComponent(
         message.query
