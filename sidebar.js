@@ -120,7 +120,7 @@ sendBtn.addEventListener("click", async () => {
       
       // Send message through the port
       port.postMessage({
-        type: "CAPTURE_SCREENSHOT",
+        type: "PROMPT_AI",
         prompt,
         tabId: tab.id
       });

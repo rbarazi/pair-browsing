@@ -22,7 +22,6 @@
   "content_scripts": [{
     "js": ["contentScript.js", "lib/buildDomTree.js"],
     "matches": ["<all_urls>"]
-    // "all_frames": true
   }],
   "side_panel": {
     "default_path": "sidebar.html"

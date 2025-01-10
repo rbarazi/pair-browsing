@@ -124,7 +124,7 @@ class ScreenshotManager {
 }
 
 // Function to handle screenshot capture
-async function handleScreenshotCapture(prompt, tabId, port = null, previousSteps = []) {
+async function promptAI(prompt, tabId, port = null, previousSteps = []) {
   const screenshotManager = new ScreenshotManager();
   await screenshotManager.initialize();
 
@@ -205,13 +205,18 @@ chrome.runtime.onConnect.addListener((port) => {
 
     port.onMessage.addListener(async (message) => {
       console.log('Received message in background:', message);
-      if (message.type === "CAPTURE_SCREENSHOT") {
-        const result = await handleScreenshotCapture(message.prompt, message.tabId, port, []);
+      if (message.type === "PROMPT_AI") {
+        const result = await promptAI(
+          message.prompt,
+          message.tabId,
+          port,
+          []
+        );
         port.postMessage({
           type: "AI_RESPONSE",
           success: result.success,
           serverResponse: result.success ? result.response : undefined,
-          error: result.success ? undefined : result.error
+          error: result.success ? undefined : result.error,
         });
       }
     });
@@ -257,18 +262,6 @@ chrome.action.onClicked.addListener(async (tab) => {
 
 // Listen for messages from the content script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.type === "CAPTURE_SCREENSHOT") {
-    const tabId = request.tabId || sender.tab.id;
-    handleScreenshotCapture(request.prompt, tabId, null, [])
-      .then(result => {
-        sendResponse(result);
-      })
-      .catch(error => {
-        sendResponse({ success: false, error: error.message });
-      });
-    return true;  // Will respond asynchronously
-  }
-
   if (request.type === "SWITCH_TAB") {
     chrome.tabs.update(request.tabId, { active: true });
     return true;
@@ -411,13 +404,11 @@ const BROWSER_AUTOMATION_SCHEMA = {
             description: "The output format (required for extract_content action)"
           }
         },
-        required: ["action", "description"],
-        additionalProperties: false
+        required: ["action", "description"]
       }
     }
   },
-  required: ["description", "actions"],
-  additionalProperties: false
+  required: ["description", "actions"]
 };
 
 // Update the OpenAI schema
@@ -522,29 +513,7 @@ async function sendToGemini(prompt, base64Screenshot, apiKey, model, systemPromp
         topP: 0.95,
         maxOutputTokens: 1024,
         responseMimeType: "application/json",
-        responseSchema: {
-          type: "OBJECT",
-          properties: {
-            description: { type: "STRING" },
-            actions: {
-              type: "ARRAY",
-              items: {
-                type: "OBJECT",
-                properties: {
-                  action: { type: "STRING" },
-                  index: { type: "NUMBER" },
-                  value: { type: "STRING" },
-                  description: { type: "STRING" },
-                  query: { type: "STRING" },
-                  url: { type: "STRING" },
-                  amount: { type: "NUMBER" },
-                  keys: { type: "STRING" },
-                  format: { type: "STRING" }
-                }
-              }
-            }
-          }
-        }
+        responseSchema: BROWSER_AUTOMATION_SCHEMA
       }
     };
 
@@ -731,8 +700,8 @@ class StepManager {
     // Combine original prompt with next prompt for context
     const combinedPrompt = `Previous request: "${currentPrompt}"\nNext request: "${actionData.next_prompt}"`;
     
-    // Recursively call handleScreenshotCapture with the combined prompt and updated steps
-    return await handleScreenshotCapture(combinedPrompt, this.tabId, this.port, updatedSteps);
+    // Recursively call promptAI with the combined prompt and updated steps
+    return await promptAI(combinedPrompt, this.tabId, this.port, updatedSteps);
   }
 }
 
