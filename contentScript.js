@@ -243,6 +243,11 @@ function findElementBySelector(selector) {
 
 // Initialize cursor in the middle of the viewport when extension is activated
 function initializeCursor() {
+  // Only initialize cursor in the top frame
+  if (window.top !== window.self) {
+    return;
+  }
+
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
   const x = viewportWidth / 2;

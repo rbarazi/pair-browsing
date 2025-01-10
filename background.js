@@ -136,7 +136,6 @@ async function handleScreenshotCapture(prompt, tabId, port = null, previousSteps
     const screenshotUrl = await screenshotManager.captureScreenshot(tabId);
     await screenshotManager.sendDebugScreenshot(tabId, port, screenshotUrl);
     
-
     // Send to AI service
     const response = await sendPromptAndScreenshotToServer(prompt, screenshotUrl, previousSteps, stringifiedInteractiveElements);
     console.log('AI service response received:', {
@@ -147,22 +146,28 @@ async function handleScreenshotCapture(prompt, tabId, port = null, previousSteps
     
     // Send the response to the content script for handling
     if (response.success) {
-      const actionData = JSON.parse(response.response);
-      console.log('Parsed action data:', actionData);
+      const responseData = JSON.parse(response.response);
+      console.log('Parsed response data:', responseData);
       
-      // Send initial action description to sidebar
-      sendSidebarMessage(port, `Executing: ${actionData.description}`);
+      // Send initial task description to sidebar
+      sendSidebarMessage(port, `Task: ${responseData.description}, steps: ${responseData.actions.length}`);
       
-      // Handle the current action
+      // Create action handler instance
       const actionHandler = new ActionHandler(tabId, port);
-      await actionHandler.handleAction(actionData);
 
-      // Wait for the page to fully load and render after the action
-      await waitForPageLoad(tabId);
+      // Loop through and execute each action in sequence
+      for (const actionData of responseData.actions) {
+        // Send action description to sidebar        
+        // Handle the current action
+        await actionHandler.handleAction(actionData);
+
+        // Wait for the page to fully load and render after each action
+        await waitForPageLoad(tabId);
+      }
 
       // Handle next steps if in agent mode
       const stepManager = new StepManager(tabId, port);
-      const nextResult = await stepManager.handleNextStep(actionData, prompt, previousSteps);
+      const nextResult = await stepManager.handleNextStep(responseData, prompt, previousSteps);
       if (nextResult) {
         return nextResult;
       }
@@ -353,6 +358,68 @@ ${stringifiedInteractiveElements}
   return response;
 }
 
+// Shared schema for browser automation responses
+const BROWSER_AUTOMATION_SCHEMA = {
+  type: "object",
+  properties: {
+    description: {
+      type: "string",
+      description: "Clear description of the overall task or goal"
+    },
+    actions: {
+      type: "array",
+      description: "Sequence of actions to perform",
+      items: {
+        type: "object",
+        properties: {
+          action: {
+            type: "string",
+            enum: ["click", "fill", "fill_and_submit", "search_google", "go_to_url", "go_back", "scroll_down", "scroll_up", "send_keys", "extract_content"],
+            description: "The type of action to perform"
+          },
+          index: {
+            type: "number",
+            description: "The index number of the interactive element to interact with (required for click and fill actions)"
+          },
+          value: {
+            type: "string",
+            description: "The value to fill in the element (required for fill action)"
+          },
+          description: {
+            type: "string",
+            description: "Clear description of what this specific action will do"
+          },
+          query: {
+            type: "string",
+            description: "The search query (required for search_google action)"
+          },
+          url: {
+            type: "string",
+            description: "The URL to navigate to (required for go_to_url action)"
+          },
+          amount: {
+            type: "number",
+            description: "The scroll amount in pixels (optional for scroll actions)"
+          },
+          keys: {
+            type: "string",
+            description: "The keys to send (required for send_keys action)"
+          },
+          format: {
+            type: "string",
+            enum: ["text", "markdown", "html"],
+            description: "The output format (required for extract_content action)"
+          }
+        },
+        required: ["action", "description"],
+        additionalProperties: false
+      }
+    }
+  },
+  required: ["description", "actions"],
+  additionalProperties: false
+};
+
 // Update the OpenAI schema
 async function sendToOpenAI(prompt, base64Screenshot, apiKey, model, systemPrompt) {
   console.log('Preparing OpenAI request');
@@ -388,53 +455,9 @@ async function sendToOpenAI(prompt, base64Screenshot, apiKey, model, systemPromp
     response_format: {
       type: "json_schema",
       json_schema: {
-        name: "browser_automation_action",
-        description: "Structured response for browser automation actions using element indices",
-        schema: {
-          type: "object",
-          properties: {
-            action: {
-              type: "string",
-              enum: ["click", "fill", "fill_and_submit", "search_google", "go_to_url", "go_back", "scroll_down", "scroll_up", "send_keys", "extract_content"],
-              description: "The type of action to perform"
-            },
-            index: {
-              type: "number",
-              description: "The index number of the interactive element to interact with (required for click and fill actions)"
-            },
-            value: {
-              type: "string",
-              description: "The value to fill in the element (required for fill action)"
-            },
-            description: {
-              type: "string",
-              description: "Clear description of what will be done"
-            },
-            query: {
-              type: "string",
-              description: "The search query (required for search_google action)"
-            },
-            url: {
-              type: "string",
-              description: "The URL to navigate to (required for go_to_url action)"
-            },
-            amount: {
-              type: "number",
-              description: "The scroll amount in pixels (optional for scroll actions)"
-            },
-            keys: {
-              type: "string",
-              description: "The keys to send (required for send_keys action)"
-            },
-            format: {
-              type: "string",
-              enum: ["text", "markdown", "html"],
-              description: "The output format (required for extract_content action)"
-            }
-          },
-          required: ["action", "description"],
-          additionalProperties: false
-        }
+        name: "browser_automation_sequence",
+        description: "Structured response for a sequence of browser automation actions",
+        schema: BROWSER_AUTOMATION_SCHEMA
       }
     }
   };
@@ -498,7 +521,30 @@ async function sendToGemini(prompt, base64Screenshot, apiKey, model, systemPromp
         topK: 40,
         topP: 0.95,
         maxOutputTokens: 1024,
-        responseMimeType: "text/plain"
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: "OBJECT",
+          properties: {
+            description: { type: "STRING" },
+            actions: {
+              type: "ARRAY",
+              items: {
+                type: "OBJECT",
+                properties: {
+                  action: { type: "STRING" },
+                  index: { type: "NUMBER" },
+                  value: { type: "STRING" },
+                  description: { type: "STRING" },
+                  query: { type: "STRING" },
+                  url: { type: "STRING" },
+                  amount: { type: "NUMBER" },
+                  keys: { type: "STRING" },
+                  format: { type: "STRING" }
+                }
+              }
+            }
+          }
+        }
       }
     };
 
