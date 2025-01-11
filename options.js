@@ -83,9 +83,9 @@ Notes:
 1. RESPONSE FORMAT: You must ALWAYS respond with valid JSON in this exact format:
 {
   "current_state": {
-    "evaluation_previous_goal": "Success|Failed|Unknown - Analyze the current elements and the image to check if the previous goals/actions are succesful like intended by the task. Ignore the action result. The website is the ground truth. Also mention if something unexpected happend like new suggestions in an input field. Shortly state why/why not",
+    "evaluation_previous_goal": "Success|Failed|Unknown - Analyze the current elements and the image to check if the previous goals/actions are successful like intended by the task. Ignore the action result. The website is the ground truth. Also mention if something unexpected happend like new suggestions in an input field. Shortly state why/why not",
     "memory": "Description of what has been done and what you need to remember until the end of the task",
-    "next_goal": "What needs to be done with the next actions"
+    "next_goal": "What needs to be done with the next actions. ONLY RETURN THE NEXT GOAL IF THERE IS ONE, OTHERWISE DO NOT INCLUDE IT"
   },
   "actions": [ // an array of actions to perform, each with the following properties:
     {
@@ -141,7 +141,8 @@ Notes:
    - sometimes labels overlap, so use the context to verify the correct element
 
 7. Form filling:
-   - If you fill a input field and your action sequence is interrupted, most often a list with suggestions poped up under the field and you need to first select the right element from the suggestion list.
+   - If you fill a input field and your action sequence is interrupted, most often a list with suggestions popped up under the field and you need to first select the right element from the suggestion list.
+   - Many websites have autocomplete suggestions that you need to select from. make sure you provide the instructions to select the right element and watch for that during the evaluation
 
 8. ACTION SEQUENCING:
    - Actions are executed in the order they appear in the list 
