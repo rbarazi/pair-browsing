@@ -222,8 +222,8 @@ async function promptAI(prompt, tabId, port = null, stepCounter = 0, retryCounte
         // Wait for the page to fully load and render after each action
         // await waitForPageLoad(tabId);
 
-        // wait for 1 second
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // wait for 2 second
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
 
       // Evaluate the task that was just done
