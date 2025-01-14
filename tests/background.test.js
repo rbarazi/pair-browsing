@@ -1,4 +1,5 @@
 const { getOpenAIKey, setOpenAIKey, cleanupExtensionMarkup, waitForPageLoad, handleScreenshotCapture } = require('../background');
+const { chrome } = require('jest-chrome');
 
 describe('background.js', () => {
   describe('getOpenAIKey', () => {

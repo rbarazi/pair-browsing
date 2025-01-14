@@ -1,5 +1,6 @@
 const { JSDOM } = require('jsdom');
 const { buildDomTree, getElementByIndex, findElementBySelector, initializeCursor, animateCursorTo, handleClick, handleFill, cleanupExtensionMarkup } = require('../contentScript');
+const { chrome } = require('jest-chrome');
 
 describe('contentScript.js', () => {
   let dom;

@@ -4,11 +4,13 @@
   "description": "AI-powered pair browsing assistant",
   "main": "background.js",
   "scripts": {
-    "test": "jest"
+    "test": "jest --env=jsdom"
   },
   "author": "Pair Browsing",
   "license": "MIT",
   "devDependencies": {
-    "jest": "^27.0.0"
+    "jest": "^27.5.1",
+    "jest-environment-jsdom": "^27.5.1",
+    "jest-chrome": "^0.8.0"
   }
 }

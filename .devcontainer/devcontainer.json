@@ -9,5 +9,9 @@
     "esbenp.prettier-vscode"
   ],
   "postCreateCommand": "npm install",
-  "remoteUser": "node"
+  "remoteUser": "node",
+  "tasks": {
+    "test": "npm test",
+    "build": "npm install"
+  }
 }
