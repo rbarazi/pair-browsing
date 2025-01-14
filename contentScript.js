@@ -243,6 +243,11 @@ function findElementBySelector(selector) {
 
 // Initialize cursor in the middle of the viewport when extension is activated
 function initializeCursor() {
+  // Only initialize cursor in the top frame
+  if (window.top !== window.self) {
+    return;
+  }
+
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
   const x = viewportWidth / 2;
@@ -353,11 +358,23 @@ async function handleClick(elementData) {
 
 // Add cleanup function
 function cleanupExtensionMarkup() {
-  // Remove cursor element
-  // if (cursorElement) {
-  //   cursorElement.remove();
-  //   cursorElement = null;
-  // }
+  try {
+    // Remove the highlight container and all its contents
+    const container = document.getElementById("playwright-highlight-container");
+    if (container) {
+      container.remove();
+    }
+
+    // Remove highlight attributes from elements
+    const highlightedElements = document.querySelectorAll(
+      '[browser-user-highlight-id^="playwright-highlight-"]'
+    );
+    highlightedElements.forEach((el) => {
+      el.removeAttribute("browser-user-highlight-id");
+    });
+  } catch (e) {
+    console.error("Failed to remove highlights:", e);
+  }
 
   // Remove any highlight overlays
   const overlays = document.querySelectorAll(
@@ -740,64 +757,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           console.error("Error performing fill:", error);
           sendResponse({ success: false, error: error.message });
         });
-    } else if (message.type === "PERFORM_FILL_AND_SUBMIT") {
-      const elementData = interactiveElementsMap[parseInt(message.index)];
-      console.log("Attempting to fill and submit element:", {
-        requestedIndex: message.index,
-        foundElement: elementData,
-        value: message.value,
-      });
-      if (!elementData) {
-        sendResponse({
-          success: false,
-          error: `No element found with index: ${message.index}`,
-        });
-        return true;
-      }
-
-      // First fill the element
-      handleClick(elementData);
-      handleFill(elementData, message.value)
-        .then(async (success) => {
-          if (success) {
-            // After filling, send Enter key
-            const element = findElementBySelector(elementData.xpath);
-            if (element) {
-              element.dispatchEvent(new KeyboardEvent('keydown', {
-                key: 'Enter',
-                code: 'Enter',
-                bubbles: true,
-                composed: true,
-                cancelable: true
-              }));
-              element.dispatchEvent(new KeyboardEvent('keypress', {
-                key: 'Enter',
-                code: 'Enter',
-                bubbles: true,
-                cancelable: true,
-                composed: true
-              }));
-              element.dispatchEvent(new KeyboardEvent('keyup', {
-                key: 'Enter',
-                code: 'Enter',
-                bubbles: true,
-                cancelable: true,
-                composed: true
-              }));
-              element.dispatchEvent(
-                new Event("submit", { bubbles: true, composed: true })
-              );
-
-            }
-            sendResponse({ success: true });
-          } else {
-            sendResponse({ success: false, error: "Failed to fill element" });
-          }
-        })
-        .catch((error) => {
-          console.error("Error performing fill and submit:", error);
-          sendResponse({ success: false, error: error.message });
-        });
     } else if (message.type === "SEARCH_GOOGLE") {
       window.location.href = `https://www.google.com/search?q=${encodeURIComponent(
         message.query
@@ -887,7 +846,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       // Build the DOM tree and collect interactive elements
       try {
-        doHighlightElements = false;//chrome.storage.local.get({ debug_mode: false });
+        doHighlightElements = message.highlightElements || false;
         let includeAttributes = [
           "title",
           "type",

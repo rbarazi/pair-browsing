@@ -8,7 +8,8 @@
     "storage",
     "tabs",
     "scripting",
-    "sidePanel"
+    "sidePanel",
+    "unlimitedStorage"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -17,7 +18,8 @@
     "default_title": "Toggle Sidebar"
   },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "content_scripts": [{
     "js": ["contentScript.js", "lib/buildDomTree.js"],
@@ -31,6 +33,9 @@
       "sidebar.css",
       "sidebar.js"
     ],
+    "matches": ["<all_urls>"]
+  }, {
+    "resources": ["storage.js"],
     "matches": ["<all_urls>"]
   }],
   "options_page": "options.html"
