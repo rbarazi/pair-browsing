@@ -1,0 +1,14 @@
+{
+  "name": "pair-browsing",
+  "version": "1.0.0",
+  "description": "AI-powered pair browsing assistant",
+  "main": "background.js",
+  "scripts": {
+    "test": "jest"
+  },
+  "author": "Pair Browsing",
+  "license": "MIT",
+  "devDependencies": {
+    "jest": "^27.0.0"
+  }
+}
