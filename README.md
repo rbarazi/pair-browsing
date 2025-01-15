@@ -2,6 +2,9 @@
 
 A Chrome extension that provides an AI-powered assistant to help you navigate and interact with web pages through natural language commands.
 
+## Quick Demo
+[![Pair Browsing Demo](https://img.youtube.com/vi/yEKWRmQASDo/maxresdefault.jpg)]([https://www.youtube.com/watch?v=yEKWRmQASDo] "Pair Browsing Demo")
+
 ## Features
 
 - 🤖 Natural Language Control: Interact with web pages using simple text commands
