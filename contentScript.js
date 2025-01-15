@@ -4,382 +4,221 @@
 let cursorElement = null;
 
 // Add a global map to store interactive elements by index
-let interactiveElementsMap = new Map();
-let currentHighlightIndex = 0;
+let interactiveElementsMap = [];
+let doHighlightElements =  0;
 
 // Function to reset the interactive elements tracking
 function resetInteractiveElements() {
-  interactiveElementsMap.clear();
+  interactiveElementsMap = [];
   currentHighlightIndex = 0;
 }
 
 // Function to get element by index
 function getElementByIndex(index) {
-  const elementData = interactiveElementsMap.get(index);
-  return elementData ? findElementBySelector(elementData.xpath) : null;
+  console.log("Getting element by index:", index);
+  const elementData = interactiveElementsMap[index];
+  console.log("Interactive elements map:", elementData);
+  return elementData ? getLocateElement(elementData) : null;
+  // return elementData ? findElementBySelector(elementData.xpath) : null;
 }
 
-// Add the buildDomTree function
+// ==========================================================
+// 1) Utility to build a CSS selector from an element object
+//    (similar to the earlier snippet):
+// ==========================================================
+function convertSimpleXPathToCssSelector(xpath) {
+  if (!xpath) return '';
+
+  // Remove leading slashes
+  const normalized = xpath.replace(/^\/+/, '');
+  const parts = normalized.split('/');
+  const cssParts = [];
+
+  for (const part of parts) {
+    if (!part) continue;
+
+    if (part.includes('[')) {
+      // Something like div[1], div[last()]
+      const bracketIndex = part.indexOf('[');
+      let basePart = part.slice(0, bracketIndex);
+      const indexPart = part.slice(bracketIndex);
+      // e.g. "[1][2]" => split on ']' => ["[1","[2",""]
+      const indices = indexPart.split(']').filter(Boolean).map(s => s.replace('[', ''));
+
+      for (const idx of indices) {
+        if (/^\d+$/.test(idx)) {
+          const num = parseInt(idx, 10);
+          basePart += `:nth-of-type(${num})`;
+        } else if (idx === 'last()') {
+          basePart += ':last-of-type';
+        } else if (idx.includes('position()') && idx.includes('>1')) {
+          basePart += ':nth-of-type(n+2)';
+        }
+      }
+      cssParts.push(basePart);
+    } else {
+      cssParts.push(part);
+    }
+  }
+
+  return cssParts.join(' > ');
+}
+
+// Some set of "safe" attributes you want to include in the selector:
+const SAFE_ATTRIBUTES = new Set([
+  'id',
+  'name',
+  'type',
+  'value',
+  'placeholder',
+  'aria-label',
+  'aria-labelledby',
+  'aria-describedby',
+  'role',
+  'for',
+  'autocomplete',
+  'required',
+  'readonly',
+  'alt',
+  'title',
+  'src',
+  'data-testid',
+  'data-id',
+  'data-qa',
+  'data-cy',
+  'href',
+  'target',
+]);
+
+const VALID_CLASS_NAME_REGEX = /^[a-zA-Z_][a-zA-Z0-9_-]*$/;
+
 /**
- * buildDomTree - Merged "Best of Both Worlds" Implementation
- *
- * Traverses the DOM (including shadow roots & iframes if desired),
- * captures key info (attributes, XPath, visibility, interactivity),
- * optionally highlights elements, and sets up a MutationObserver
- * to maintain the in-memory DOM tree for subsequent changes.
- *
- * @param {Node} rootElement - The starting point of the DOM (often document or document.body).
- * @param {Object} options
- *    @param {boolean} [doHighlightElements=false] - Whether to visually highlight elements via overlays.
- *    @param {boolean} [includeShadowRoots=true]   - Traverse shadow DOM trees?
- *    @param {boolean} [includeIFrames=true]       - Traverse iframes?
- *    @param {boolean} [includeTextNodes=true]     - Include text nodes in the output data?
- *    @param {boolean} [observeMutations=true]     - Observe DOM changes using a MutationObserver?
- * @returns {Promise<Object>} A nested JSON-like structure representing the DOM.
+ * Builds a more descriptive CSS selector from:
+ *   - The element's XPath (converted)
+ *   - Classes
+ *   - Additional "safe" attributes
  */
-async function buildDomTree(rootElement, options = {}) {
-  // Merge defaults
-  const {
-    doHighlightElements = false,
-    includeShadowRoots = true,
-    includeIFrames = true,
-    includeTextNodes = true,
-    observeMutations = true,
-  } = options;
+function enhancedCssSelectorForElement(element) {
+  try {
+    let cssSelector = convertSimpleXPathToCssSelector(element.xpath);
 
-  let highlightIndex = 0;
-
-  // --------------------------------------------------------------------------
-  //  1. HELPER FUNCTIONS
-  // --------------------------------------------------------------------------
-
-  /**
-   * getXPathTree - Improved version that tries to use ID-based selector
-   * if the element or any ancestor has a unique ID. Otherwise, it falls
-   * back to a sibling-index path all the way to the root.
-   */
-  function getXPathTree(node) {
-    if (!node || node.nodeType !== Node.ELEMENT_NODE) {
-      return "";
-    }
-
-    // If the element has its own ID, just return that
-    if (node.id) {
-      return `//*[@id="${node.id}"]`;
-    }
-
-    let path = "";
-    let current = node;
-
-    while (current && current.nodeType === Node.ELEMENT_NODE) {
-      // If this node has an ID, build a partial path from here down
-      if (current.id) {
-        return `//*[@id="${current.id}"]${path}`;
-      }
-
-      // Find how many previous siblings share the same tagName
-      let index = 0;
-      let sibling = current.previousSibling;
-      while (sibling) {
-        if (
-          sibling.nodeType === Node.ELEMENT_NODE &&
-          sibling.nodeName === current.nodeName
-        ) {
-          index++;
-        }
-        sibling = sibling.previousSibling;
-      }
-
-      // Build the path segment
-      const tagName = current.nodeName.toLowerCase();
-      const pathIndex = index ? `[${index + 1}]` : "";
-      path = `/${tagName}${pathIndex}${path}`;
-
-      // Move up the DOM tree
-      current = current.parentNode;
-    }
-
-    return path;
-  }
-
-  /**
-   * isInteractiveElement - Checks if an element should be considered "interactive."
-   * Extends standard clickable tags (a, button, etc.) with ARIA roles, tabIndex, and
-   * inline event attributes (onmousedown, onclick, etc.).
-   */
-  function isInteractiveElement(element) {
-    if (!element || element.nodeType !== Node.ELEMENT_NODE) return false;
-    const tagName = element.tagName.toLowerCase();
-    // Known interactive HTML tags
-    const interactiveTags = ["a", "button", "input", "select", "textarea"];
-    if (interactiveTags.includes(tagName)) return true;
-
-    // Inline event attributes
-    const eventAttributes = [
-      "onclick",
-      "onmousedown",
-      "onmouseup",
-      "onmouseover",
-      "onmouseout",
-      "onchange",
-      "onfocus",
-      "onblur",
-    ];
-    for (let attr of eventAttributes) {
-      if (element.hasAttribute(attr)) return true;
-    }
-
-    // ARIA roles
-    const role = element.getAttribute("role");
-    const interactiveRoles = [
-      "button",
-      "link",
-      "checkbox",
-      "radio",
-      "tab",
-      "menuitem",
-      "treeitem",
-    ];
-    if (role && interactiveRoles.includes(role.toLowerCase())) {
-      return true;
-    }
-
-    // Non-negative tabIndex
-    if (
-      element.hasAttribute("tabindex") &&
-      element.getAttribute("tabindex") !== "-1"
-    ) {
-      return true;
-    }
-
-    return false;
-  }
-
-  /**
-   * highlightElement - Creates a semi-transparent overlay around
-   * an element's bounding box for debugging/visualization.
-   */
-  function highlightElement(el, label) {
-    try {
-      const rect = el.getBoundingClientRect();
-      // If the element is completely offscreen or size = 0, skip highlighting
-      if (rect.width === 0 && rect.height === 0) return;
-
-      const overlay = document.createElement("div");
-      overlay.style.position = "absolute";
-      overlay.style.top = rect.top + window.scrollY + "px";
-      overlay.style.left = rect.left + window.scrollX + "px";
-      overlay.style.width = rect.width + "px";
-      overlay.style.height = rect.height + "px";
-      overlay.style.pointerEvents = "none";
-      overlay.style.border = "2px solid red";
-      overlay.style.backgroundColor = "rgba(255, 0, 0, 0.3)";
-      overlay.style.zIndex = 999999;
-
-      // Label overlay
-      overlay.style.color = "white";
-      overlay.style.fontSize = "12px";
-      overlay.style.fontFamily = "monospace";
-      overlay.style.padding = "2px";
-      overlay.textContent = label;
-
-      document.body.appendChild(overlay);
-    } catch (e) {
-      console.warn("Highlight failed on element:", el, e);
-    }
-  }
-
-  /**
-   * isElementVisible - Checks CSS-based visibility (display, visibility, opacity) AND
-   * ensures nonzero offsets, so we skip elements that are effectively hidden.
-   */
-  function isElementVisible(el) {
-    if (!(el instanceof HTMLElement)) return false;
-    const style = window.getComputedStyle(el);
-    if (
-      style.display === "none" ||
-      style.visibility === "hidden" ||
-      parseFloat(style.opacity) === 0
-    ) {
-      return false;
-    }
-
-    // Check the offset dimension for real size
-    if (el.offsetWidth === 0 && el.offsetHeight === 0) {
-      return false;
-    }
-    return true;
-  }
-
-  /**
-   * findNodeByXPath - Locates a node in our JSON-like domTree by matching its XPath.
-   * Used by the MutationObserver to update existing nodes when changes occur.
-   */
-  function findNodeByXPath(tree, xpath) {
-    if (!tree) return null;
-    // Compare if the node's xpath property matches
-    if (tree.xpath === xpath) {
-      return tree;
-    }
-    // Recursively check children
-    if (tree.children) {
-      for (const child of tree.children) {
-        const found = findNodeByXPath(child, xpath);
-        if (found) return found;
-      }
-    }
-    // Check shadowRoot subtrees
-    if (tree.shadowRoot) {
-      const foundShadow = findNodeByXPath(tree.shadowRoot, xpath);
-      if (foundShadow) return foundShadow;
-    }
-    // Check iframe subtrees
-    if (tree.iframe) {
-      const foundIframe = findNodeByXPath(tree.iframe, xpath);
-      if (foundIframe) return foundIframe;
-    }
-    return null;
-  }
-
-  // --------------------------------------------------------------------------
-  //  2. RECURSIVE TRAVERSAL FUNCTION
-  // --------------------------------------------------------------------------
-
-  async function traverse(node) {
-    if (!node) return null;
-
-    // ELEMENT_NODE
-    if (node.nodeType === Node.ELEMENT_NODE) {
-      const el = node;
-
-      // Filter out some tags
-      const ignoredTags = ["script", "style", "link", "meta", "svg"];
-      if (ignoredTags.includes(el.tagName.toLowerCase())) {
-        return null;
-      }
-
-      // Check if element is interactive and visible
-      const isVisible = isElementVisible(el);
-      const isInteractive = isInteractiveElement(el);
-
-      // If element is both interactive and visible, add it to our map
-      if (isInteractive && isVisible) {
-        const elementData = {
-          index: currentHighlightIndex,
-          tagName: el.tagName.toLowerCase(),
-          xpath: getXPathTree(el),
-          text: el.textContent?.trim().substring(0, 100) || "",
-          attributes: {},
-        };
-
-        // Gather identifying attributes
-        for (const attr of el.attributes) {
-          if (
-            [
-              "id",
-              "class",
-              "name",
-              "title",
-              "aria-label",
-              "role",
-              "type",
-            ].includes(attr.name)
-          ) {
-            elementData.attributes[attr.name] = attr.value;
-          }
-        }
-
-        // Store in map
-        interactiveElementsMap.set(currentHighlightIndex, elementData);
-
-        // Optional highlighting for debugging
-        if (doHighlightElements) {
-          highlightElement(
-            el,
-            `${currentHighlightIndex}: <${elementData.tagName}>`
-          );
-        }
-
-        currentHighlightIndex++;
-      }
-
-      // Recurse into children
-      const children = [];
-      for (const child of el.childNodes) {
-        const childData = await traverse(child);
-        if (childData) {
-          children.push(childData);
+    // If there's a class attribute, append valid class names
+    if (element.attributes && element.attributes.class) {
+      const classes = element.attributes.class.split(/\s+/).filter(Boolean);
+      for (const cls of classes) {
+        if (VALID_CLASS_NAME_REGEX.test(cls)) {
+          cssSelector += `.${cls}`;
         }
       }
-
-      return children.length > 0 ? { children } : null;
     }
 
-    return null;
-  }
+    // Append additional safe attributes
+    for (const [attr, value] of Object.entries(element.attributes || {})) {
+      // skip class (already handled)
+      if (attr === 'class') continue;
+      if (!attr.trim()) continue;  // skip empty attribute name
+      if (!SAFE_ATTRIBUTES.has(attr)) continue;
 
-  // --------------------------------------------------------------------------
-  //  3. INITIAL TRAVERSAL
-  // --------------------------------------------------------------------------
-  const domTree = await traverse(rootElement);
+      // escape colons in attribute name
+      const safeAttr = attr.replace(':', '\\:');
 
-  // --------------------------------------------------------------------------
-  //  4. MUTATION OBSERVER - If observeMutations is enabled
-  // --------------------------------------------------------------------------
-  let observer = null;
-  if (observeMutations) {
-    observer = new MutationObserver(async (mutations) => {
-      for (const mutation of mutations) {
-        if (mutation.type === "childList") {
-          // Added Nodes
-          for (const addedNode of mutation.addedNodes) {
-            const addedNodeData = await traverse(addedNode);
-            if (addedNodeData) {
-              // Try to attach it under the parent's node in our domTree
-              const parentXPath = getXPathTree(mutation.target);
-              const parentNodeInTree = findNodeByXPath(domTree, parentXPath);
-              if (parentNodeInTree && parentNodeInTree.children) {
-                parentNodeInTree.children.push(addedNodeData);
-              }
-            }
-          }
-          // Removed Nodes (optional): you can find & remove them similarly
-        } else if (mutation.type === "attributes") {
-          // An attribute changed
-          const element = mutation.target;
-          if (element.nodeType === Node.ELEMENT_NODE) {
-            const elementXPath = getXPathTree(element);
-            const domNode = findNodeByXPath(domTree, elementXPath);
-            if (domNode) {
-              // Update changed attribute or remove if null
-              const attrName = mutation.attributeName;
-              const attrValue = element.getAttribute(attrName);
-              if (attrValue !== null) {
-                domNode.attributes[attrName] = attrValue;
-              } else {
-                delete domNode.attributes[attrName];
-              }
-
-              // Possibly update isInteractive & isVisible
-              domNode.isInteractive = isInteractiveElement(element);
-              domNode.isVisible = isElementVisible(element);
-            }
-          }
-        }
-        // characterData or subtree changes if needed
+      if (value === '') {
+        // e.g. [required], [checked], ...
+        cssSelector += `[${safeAttr}]`;
+      } else if (/["'<>`]/.test(value)) {
+        // If special chars, do a "contains" match
+        const safeValue = value.replace(/"/g, '\\"');
+        cssSelector += `[${safeAttr}*="${safeValue}"]`;
+      } else {
+        cssSelector += `[${safeAttr}="${value}"]`;
       }
-    });
+    }
 
-    observer.observe(rootElement, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      characterData: true,
-    });
+    return cssSelector || element.tagName;
+  } catch (err) {
+    // fallback
+    const tagName = element.tagName || '*';
+    const highlightIndex = element.highlightIndex;
+    return `${tagName}[highlight_index='${highlightIndex}']`;
+  }
+}
+
+// ==========================================================
+// 2) Native "getLocateElement" function to find the element
+//    directly in the DOM (without Puppeteer/Playwright).
+// ==========================================================
+/**
+ * Locates a DOM element in the current page/extension context, 
+ * even if it’s inside an iframe. We walk up the element's 
+ * "parent" chain to see if we have an iframe ancestor, then 
+ * query inside that frame's contentDocument.
+ *
+ * @param {Object} element - The DOM node object with { parent, tag_name, xpath, attributes, highlightIndex, ... }
+ * @param {Document} doc - The root Document to start from (usually window.document).
+ * @returns {HTMLElement|null}
+ */
+function getLocateElement(elementData, doc = document) {
+  const elementSelector = enhancedCssSelectorForElement(elementData)
+  let elHandle = doc.querySelector(elementSelector);
+  if (elHandle) {
+    elHandle.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    return elHandle;
   }
 
-  // Return both the tree and (optionally) the observer
-  return domTree;
+  // recursively loop through the parents and if a parent has a shadowRoot, call getLocateElement on it.
+  // find the first shadowRoot parent and use that for the query.
+
+  let shadowRootParent = elementData;
+  while (shadowRootParent.parent) {
+    shadowRootParent = shadowRootParent.parent;
+    if (shadowRootParent.shadowRoot) {
+      break;
+    }
+  }
+
+  if (shadowRootParent && shadowRootParent.shadowRoot) {
+    console.log("Locating shadowRoot parent", shadowRootParent);
+    const parentNode = getLocateElement(shadowRootParent);
+    if (!parentNode) {
+      return null;
+    }
+    if (parentNode.shadowRoot) {
+      console.log("parentNode", parentNode);
+      console.log("elementSelector", elementSelector);
+      elHandle = parentNode.shadowRoot.querySelector(elementSelector);
+    }
+    if (!elHandle) {
+      elHandle = parentNode.querySelector(elementSelector);
+    }
+    if (!elHandle) {
+      return null;
+    } else {
+      elHandle.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+      return elHandle;
+    }
+  }
+
+  let iframeParent = elementData;
+  while (iframeParent.parent) {
+    iframeParent = iframeParent.parent;
+    if (iframeParent.tagName === "iframe") {
+      break;
+    }
+  }
+
+  if (iframeParent && iframeParent.tagName === "iframe") {
+    const parentNode = getLocateElement(iframeParent);
+    if (!parentNode) {
+      return null;
+    }
+    elHandle = parentNode.contentDocument.querySelector(elementSelector);
+    if (!elHandle) {
+      return null;
+    } else {
+      elHandle.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+      return elHandle;
+    }
+  }
 }
 
 // Function to determine if a selector is XPath or CSS
@@ -391,26 +230,24 @@ function isXPath(selector) {
   );
 }
 
-// Function to find element by either XPath or CSS selector
 function findElementBySelector(selector) {
-  if (isXPath(selector)) {
-    // Use XPath
-    const result = document.evaluate(
-      selector,
-      document,
-      null,
-      XPathResult.FIRST_ORDERED_NODE_TYPE,
-      null
-    );
-    return result.singleNodeValue;
-  } else {
-    // Use CSS selector
-    return document.querySelector(selector);
-  }
+  const result = document.evaluate(
+    selector,
+    document,
+    null,
+    XPathResult.FIRST_ORDERED_NODE_TYPE,
+    null
+  );
+  return result.singleNodeValue;
 }
 
 // Initialize cursor in the middle of the viewport when extension is activated
 function initializeCursor() {
+  // Only initialize cursor in the top frame
+  if (window.top !== window.self) {
+    return;
+  }
+
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
   const x = viewportWidth / 2;
@@ -456,16 +293,17 @@ async function animateCursorTo(targetX, targetY, duration = 500) {
 }
 
 // Update the click handler to use cursor animation
-async function handleClick(selector) {
+async function handleClick(elementData) {
   try {
-    if (!selector) {
-      console.error("No selector provided");
+    if (!elementData) {
+      console.error("No element data provided");
       return false;
     }
 
-    const element = findElementBySelector(selector);
+    const element = getLocateElement(elementData);
+    console.log("Clickable element:", element);
     if (!element) {
-      console.warn(`Element not found with selector: ${selector}`);
+      console.warn(`Element not found with selector: ${elementData.xpath}`);
       return false;
     }
 
@@ -483,8 +321,17 @@ async function handleClick(selector) {
 
     // Show click animation
     showClickIndicator(x, y);
+    // Try native click() if element supports it
+    if (typeof element.click === 'function') {
+      try {
+        element.click();
+        return; // Exit if native click is successful
+      } catch (error) {
+        console.log('Native click() failed:', error);
+      }
+    }
 
-    // Trigger events after cursor reaches the target
+    // Trigger events after cursor reaches the target only if native click failed
     ["mousedown", "mouseup", "click"].forEach((eventType) => {
       element.dispatchEvent(
         new MouseEvent(eventType, {
@@ -492,7 +339,7 @@ async function handleClick(selector) {
           bubbles: true,
           cancelable: true,
           clientX: x,
-          clientY: y,
+          clientY: y
         })
       );
     });
@@ -511,10 +358,22 @@ async function handleClick(selector) {
 
 // Add cleanup function
 function cleanupExtensionMarkup() {
-  // Remove cursor element
-  if (cursorElement) {
-    cursorElement.remove();
-    cursorElement = null;
+  try {
+    // Remove the highlight container and all its contents
+    const container = document.getElementById("playwright-highlight-container");
+    if (container) {
+      container.remove();
+    }
+
+    // Remove highlight attributes from elements
+    const highlightedElements = document.querySelectorAll(
+      '[browser-user-highlight-id^="playwright-highlight-"]'
+    );
+    highlightedElements.forEach((el) => {
+      el.removeAttribute("browser-user-highlight-id");
+    });
+  } catch (e) {
+    console.error("Failed to remove highlights:", e);
   }
 
   // Remove any highlight overlays
@@ -536,24 +395,187 @@ function cleanupExtensionMarkup() {
   indicators.forEach((indicator) => indicator.remove());
 }
 
+function createSelectorMap(elementTree) {
+  function processNode(node) {
+    if (node.type === "element") {
+      // If this node is highlighted, store it
+      if (typeof node.highlightIndex === "number") {
+        interactiveElementsMap[node.highlightIndex] = node;
+      }
+      // Continue traversing children
+      if (Array.isArray(node.children)) {
+        node.children.forEach((child) => processNode(child));
+      }
+    }
+    // Text nodes, or other node types, we do nothing special here
+  }
+
+  processNode(elementTree);
+  return interactiveElementsMap;
+}
+
+function parseNode(nodeData, parent = null) {
+  // Validate input
+  if (!nodeData || typeof nodeData !== 'object') {
+    return null;
+  }
+
+  try {
+    // Handle text nodes
+    if (nodeData.type === 'TEXT_NODE' || nodeData.type === 'text') {
+      if (typeof nodeData.text !== 'string') {
+        console.warn('Text node missing valid text content');
+        return null;
+      }
+      return {
+        type: 'text',
+        text: nodeData.text.trim(), // Trim whitespace
+        isVisible: Boolean(nodeData.isVisible),
+        parent: parent,
+      };
+    }
+
+    // Handle element nodes
+    if (!nodeData.tagName) {
+      return null;
+    }
+
+    const elementNode = {
+      type: 'element',
+      tagName: nodeData.tagName,
+      xpath: nodeData.xpath || '',
+      attributes: nodeData.attributes || {},
+      isVisible: Boolean(nodeData.isVisible),
+      isInteractive: Boolean(nodeData.isInteractive),
+      isTopElement: Boolean(nodeData.isTopElement),
+      highlightIndex: typeof nodeData.highlightIndex === 'number' ? nodeData.highlightIndex : null,
+      shadowRoot: Boolean(nodeData.shadowRoot),
+      children: [], // Initialize empty array
+      parent: parent,
+    };
+
+    // Recursively parse children if they exist
+    if (Array.isArray(nodeData.children)) {
+      elementNode.children = nodeData.children
+        .map(child => parseNode(child, elementNode)) // Use regular function call instead of this
+        .filter(child => child !== null); // Filter out invalid children
+    }
+
+    return elementNode;
+
+  } catch (error) {
+    console.error('Error parsing node:', error);
+    return null;
+  }
+}
+
+
 // Function to get the list of interactive elements
-function getInteractiveElementsList() {
-  const list = Array.from(interactiveElementsMap.values());
-  console.log("Complete Interactive Elements List:", list);
-  return list;
+function getInteractiveElementsList(rootNode) {
+  const parsedNode = parseNode(rootNode);
+  createSelectorMap(parsedNode);
+  console.log("Interactive Elements List:", interactiveElementsMap);
+  return parsedNode;
+}
+
+
+
+function hasParentWithHighlightIndex(node) {
+  let current = node.parent;
+  while (current) {
+    if (typeof current.highlightIndex === "number") {
+      // If it's an integer or numeric, we treat that as having a highlight
+      return true;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
+function getAllTextTillNextClickableElement(node) {
+  const textParts = [];
+
+  function collectText(currentNode) {
+    // If we hit a different element that is highlighted, stop recursion down that branch
+    if (
+      currentNode !== node &&
+      currentNode.type === "element" &&
+      typeof currentNode.highlightIndex === "number"
+    ) {
+      return;
+    }
+
+    // If it's a text node, collect its text
+    if (currentNode.type === "text") {
+      textParts.push(currentNode.text);
+    }
+    // If it's an element node, keep recursing into its children
+    else if (currentNode.type === "element" && currentNode.children) {
+      currentNode.children.forEach((child) => collectText(child));
+    }
+  }
+
+  collectText(node);
+  return textParts.join("\n").trim();
+}
+
+function clickableElementsToString(rootNode, includeAttributes = []) {
+  const lines = [];
+
+  function processNode(node) {
+    if (node.type === "element") {
+      // If this element is explicitly highlighted (i.e. has highlightIndex)
+      if (typeof node.highlightIndex === "number") {
+        // Build an attributes string (only for keys in includeAttributes)
+        let attrStr = "";
+        if (includeAttributes.length > 0) {
+          const filteredAttrs = Object.entries(node.attributes)
+            .filter(([key]) => includeAttributes.includes(key))
+            .map(([key, value]) => `${key}="${value}"`)
+            .join(" ");
+          if (filteredAttrs.length > 0) {
+            attrStr = " " + filteredAttrs; // prepend a space
+          }
+        }
+
+        // Gather text under this node until another clickable element is found
+        const innerText = getAllTextTillNextClickableElement(node);
+
+        // e.g. "12[:]<button id="myBtn">Some text</button>"
+        lines.push(
+          `${node.highlightIndex}[:]<${node.tagName}${attrStr}>${innerText}</${node.tagName}>`
+        );
+      }
+
+      // Regardless of highlight, process children to find more clickable elements or text
+      if (node.children && node.children.length > 0) {
+        node.children.forEach((child) => processNode(child));
+      }
+    } else if (node.type === "text") {
+      // Only include this text if it doesn't live under a highlighted ancestor
+      // (this matches the "if not node.has_parent_with_highlight_index()" in Python)
+      // if (!hasParentWithHighlightIndex(node)) {
+      // }
+      lines.push(`_[:]${node.text}`);
+    }
+  }
+
+  processNode(rootNode);
+  return lines.join("\n");
 }
 
 // Add fill handler function
-async function handleFill(selector, value) {
+async function handleFill(elementData, value) {
   try {
-    if (!selector || !value) {
-      console.error("No selector or value provided");
+    if (!elementData) {
+      console.error("No element data provided");
       return false;
     }
 
-    const element = findElementBySelector(selector);
+    const element = getLocateElement(elementData);
+    console.log("Filling element:", element);
     if (!element) {
-      console.warn(`Element not found with selector: ${selector}`);
+      console.warn(`Element not found with selector: ${elementData.xpath}`);
       return false;
     }
 
@@ -574,6 +596,8 @@ async function handleFill(selector, value) {
 
     // Focus the element
     element.focus();
+    element.dispatchEvent(new Event("focus", { bubbles: true, composed: true }));
+    element.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
 
     // Clear existing value if it's an input or textarea
     if (element.tagName === "INPUT" || element.tagName === "TEXTAREA") {
@@ -582,14 +606,47 @@ async function handleFill(selector, value) {
 
     // Type the value character by character
     for (const char of value) {
-      element.value = element.value + char;
+      // Create and dispatch keydown event
+      const keydownEvent = new KeyboardEvent("keydown", {
+        key: char,
+        code: `Key${char.toUpperCase()}`,
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      });
+      element.dispatchEvent(keydownEvent);
+
+      // Create and dispatch keypress event
+      const keypressEvent = new KeyboardEvent("keypress", {
+        key: char,
+        code: `Key${char.toUpperCase()}`,
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+      });
+      element.dispatchEvent(keypressEvent);
+
+      // Append the character to the element's value
+      element.value += char;
+
       // Dispatch input event after each character
-      element.dispatchEvent(new Event("input", { bubbles: true }));
-      await new Promise((resolve) => setTimeout(resolve, 50)); // Add slight delay between characters
+      element.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+
+      // Create and dispatch keyup event
+      const keyupEvent = new KeyboardEvent("keyup", {
+        key: char,
+        code: `Key${char.toUpperCase()}`,
+        bubbles: true,
+        cancelable: true,
+      });
+      element.dispatchEvent(keyupEvent);
+
+      // Add slight delay between characters
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
     // Dispatch change event after filling
-    element.dispatchEvent(new Event("change", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
 
     // Remove highlight after a delay
     setTimeout(() => {
@@ -652,7 +709,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } else if (message.type === "CHECK_DOCUMENT_READY") {
       sendResponse({ success: true, ready: isDocumentReady() });
     } else if (message.type === "PERFORM_CLICK") {
-      const elementData = interactiveElementsMap.get(parseInt(message.index));
+      console.log("Message.index:", message.index);
+      console.log("Message.index parsed:", parseInt(message.index));
+      console.log("interactiveElementsMap:", interactiveElementsMap);
+      const elementData = interactiveElementsMap[parseInt(message.index)];
+      console.log("elementData:", elementData);
       console.log("Attempting to click element:", {
         requestedIndex: message.index,
         foundElement: elementData,
@@ -665,7 +726,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return true;
       }
 
-      handleClick(elementData.xpath)
+      handleClick(elementData)
         .then((success) => {
           sendResponse({ success });
         })
@@ -674,7 +735,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ success: false, error: error.message });
         });
     } else if (message.type === "PERFORM_FILL") {
-      const elementData = interactiveElementsMap.get(parseInt(message.index));
+      const elementData = interactiveElementsMap[parseInt(message.index)];
       console.log("Attempting to fill element:", {
         requestedIndex: message.index,
         foundElement: elementData,
@@ -688,50 +749,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return true;
       }
 
-      handleFill(elementData.xpath, message.value)
+      handleFill(elementData, message.value)
         .then((success) => {
           sendResponse({ success });
         })
         .catch((error) => {
           console.error("Error performing fill:", error);
-          sendResponse({ success: false, error: error.message });
-        });
-    } else if (message.type === "PERFORM_FILL_AND_SUBMIT") {
-      const elementData = interactiveElementsMap.get(parseInt(message.index));
-      console.log("Attempting to fill and submit element:", {
-        requestedIndex: message.index,
-        foundElement: elementData,
-        value: message.value,
-      });
-      if (!elementData) {
-        sendResponse({
-          success: false,
-          error: `No element found with index: ${message.index}`,
-        });
-        return true;
-      }
-
-      // First fill the element
-      handleFill(elementData.xpath, message.value)
-        .then(async (success) => {
-          if (success) {
-            // After filling, send Enter key
-            const element = findElementBySelector(elementData.xpath);
-            if (element) {
-              element.dispatchEvent(new KeyboardEvent('keydown', {
-                key: 'Enter',
-                code: 'Enter',
-                bubbles: true,
-                cancelable: true
-              }));
-            }
-            sendResponse({ success: true });
-          } else {
-            sendResponse({ success: false, error: "Failed to fill element" });
-          }
-        })
-        .catch((error) => {
-          console.error("Error performing fill and submit:", error);
           sendResponse({ success: false, error: error.message });
         });
     } else if (message.type === "SEARCH_GOOGLE") {
@@ -780,8 +803,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           } else {
             // For regular text input
             activeElement.value += message.keys;
-            activeElement.dispatchEvent(new Event("input", { bubbles: true }));
-            activeElement.dispatchEvent(new Event("change", { bubbles: true }));
+            activeElement.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+            activeElement.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
           }
         }
         sendResponse({ success: true });
@@ -806,7 +829,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         } else {
           content = document.body.innerHTML;
         }
-        sendResponse({ success: true, content });
+        sendResponse({ success: true, content: content });
       } catch (error) {
         console.error("Error extracting content:", error);
         sendResponse({ success: false, error: error.message });
@@ -822,33 +845,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       console.log("Reset interactive elements tracking");
 
       // Build the DOM tree and collect interactive elements
-      buildDomTree(document.body, {
-        doHighlightElements: false,
-        includeShadowRoots: true,
-        includeIFrames: true,
-        includeTextNodes: true,
-        observeMutations: false,
-      })
-        .then(() => {
-          // Get and log the list of interactive elements
-          const interactiveElements = getInteractiveElementsList();
-          console.log(
-            `Found ${interactiveElements.length} interactive elements`
-          );
+      try {
+        doHighlightElements = message.highlightElements || false;
+        let includeAttributes = [
+          "title",
+          "type",
+          "name",
+          "role",
+          "tabindex",
+          "aria-label",
+          "placeholder",
+          "value",
+          "alt",
+          "aria-expanded",
+        ];
+        const domTree = buildDomTree(document.body);
+        console.log("DOM Tree:", domTree);
+        const interactiveElements = getInteractiveElementsList(domTree);
+        console.log(`Found ${interactiveElementsMap.length} interactive elements`);
 
-          sendResponse({
-            success: true,
-            interactiveElements,
-          });
-        })
-        .catch((error) => {
-          console.error("Error building interactive elements list:", error);
-          sendResponse({
-            success: false,
-            error:
-              "Failed to build interactive elements list: " + error.message,
-          });
+        sendResponse({
+          success: true,
+          stringifiedInteractiveElements: clickableElementsToString(interactiveElements, includeAttributes),
         });
+      } catch (error) {
+        console.error("Error building interactive elements list:", error);
+        sendResponse({
+          success: false,
+          error:
+            "Failed to build interactive elements list: " + error.message,
+        });
+      }
     } else if (message.type === "DEBUG_SCREENSHOT") {
       // Handle debug screenshot display
       const debugOverlay = document.createElement("div");
@@ -920,7 +947,9 @@ function updateCursor(x, y) {
       pointerEvents: "none",
       userSelect: "none",
     });
-    label.textContent = "AI Assistant";
+    chrome.storage.local.get({ cursor_label: 'AI Assistant' }, (items) => {
+      label.textContent = items.cursor_label;
+    });
 
     cursorElement.appendChild(pointer);
     cursorElement.appendChild(label);
