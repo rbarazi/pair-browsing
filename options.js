@@ -1,55 +1,12 @@
-// Saves options to chrome.storage
-function saveOptions() {
-  const provider = document.getElementById('provider').value;
-  const openaiKey = document.getElementById('openaiKey').value;
-  const openaiModel = document.getElementById('openaiModel').value
-  const geminiKey = document.getElementById('geminiKey').value;
-  const geminiModel = document.getElementById('geminiModel').value;
-  const ollamaModel = document.getElementById('ollamaModel').value;
-  const systemPrompt = document.getElementById('systemPrompt').value;
-  const debugMode = document.getElementById('debugMode').checked;
-  const agentMode = document.getElementById('agentMode').checked;
-  const cursorLabel = document.getElementById('cursorLabel').value;
-
-  chrome.storage.local.set(
-    {
-      provider,
-      openai_api_key: openaiKey,
-      openai_model: openaiModel,
-      gemini_api_key: geminiKey,
-      gemini_model: geminiModel,
-      ollama_model: ollamaModel,
-      system_prompt: systemPrompt,
-      debug_mode: debugMode,
-      agent_mode: agentMode,
-      cursor_label: cursorLabel || 'AI Assistant',
-    },
-    () => {
-      const status = document.getElementById('status');
-      status.textContent = 'Options saved.';
-      status.style.display = 'block';
-      status.className = 'success';
-      setTimeout(() => {
-        status.style.display = 'none';
-      }, 2000);
-    }
-  );
-}
-
-// Restores select box and checkbox state using the preferences
-// stored in chrome.storage.
-//4. If you expect that the user's request requires a followup step, prepare a prompt for yourself and include it in the JSON object as "next_prompt"; otherwise, if the request is complete, don't include it.
-
-function restoreOptions() {
-  chrome.storage.local.get(
-    {
-      provider: "openai",
-      openai_api_key: "",
-      openai_model: "gpt-4o-mini",
-      gemini_api_key: "",
-      gemini_model: "gemini-2.0-flash-exp",
-      ollama_model: "llama3.2-vision",
-      system_prompt: `You are a precise browser automation agent that interacts with websites through structured commands. Your role is to:
+// Default configuration
+const DEFAULT_OPTIONS = {
+  provider: "openai",
+  openai_api_key: "",
+  openai_model: "gpt-4o-mini",
+  gemini_api_key: "",
+  gemini_model: "gemini-2.0-flash-exp",
+  ollama_model: "llama3.2-vision",
+  system_prompt: `You are a precise browser automation agent that interacts with websites through structured commands. Your role is to:
 1. Analyze the provided webpage elements and structure
 2. Think through the user's request and identify if you need more than one step to accomplish it. 
 3. Determine the most appropriate action based to complete the user's request.
@@ -158,24 +115,74 @@ Notes:
 
 Remember: Your responses must be valid JSON matching the specified format. Each action in the sequence must be valid.  
 `,
-      debug_mode: false,
-      agent_mode: false,
-      cursor_label: "AI Assistant",
+  debug_mode: false,
+  agent_mode: false,
+  cursor_label: "AI Assistant"
+};
+
+// Saves options to chrome.storage
+function saveOptions() {
+  // Get current values
+  const provider = document.getElementById('provider').value || DEFAULT_OPTIONS.provider;
+  const openaiKey = document.getElementById('openaiKey').value || DEFAULT_OPTIONS.openai_api_key;
+  const openaiModel = document.getElementById('openaiModel').value || DEFAULT_OPTIONS.openai_model;
+  const geminiKey = document.getElementById('geminiKey').value || DEFAULT_OPTIONS.gemini_api_key;
+  const geminiModel = document.getElementById('geminiModel').value || DEFAULT_OPTIONS.gemini_model;
+  const ollamaModel = document.getElementById('ollamaModel').value || DEFAULT_OPTIONS.ollama_model;
+  const systemPrompt = document.getElementById('systemPrompt').value || DEFAULT_OPTIONS.system_prompt;
+  const debugMode = document.getElementById('debugMode').checked;
+  const agentMode = document.getElementById('agentMode').checked;
+  const cursorLabel = document.getElementById('cursorLabel').value || DEFAULT_OPTIONS.cursor_label;
+
+  // Update UI with default values if empty
+  if (!document.getElementById('provider').value) document.getElementById('provider').value = DEFAULT_OPTIONS.provider;
+  if (!document.getElementById('openaiModel').value) document.getElementById('openaiModel').value = DEFAULT_OPTIONS.openai_model;
+  if (!document.getElementById('geminiModel').value) document.getElementById('geminiModel').value = DEFAULT_OPTIONS.gemini_model;
+  if (!document.getElementById('ollamaModel').value) document.getElementById('ollamaModel').value = DEFAULT_OPTIONS.ollama_model;
+  if (!document.getElementById('systemPrompt').value) document.getElementById('systemPrompt').value = DEFAULT_OPTIONS.system_prompt;
+  if (!document.getElementById('cursorLabel').value) document.getElementById('cursorLabel').value = DEFAULT_OPTIONS.cursor_label;
+
+  chrome.storage.local.set(
+    {
+      provider,
+      openai_api_key: openaiKey,
+      openai_model: openaiModel,
+      gemini_api_key: geminiKey,
+      gemini_model: geminiModel,
+      ollama_model: ollamaModel,
+      system_prompt: systemPrompt,
+      debug_mode: debugMode,
+      agent_mode: agentMode,
+      cursor_label: cursorLabel,
     },
-    (items) => {
-      document.getElementById("provider").value = items.provider;
-      document.getElementById("openaiKey").value = items.openai_api_key;
-      document.getElementById("openaiModel").value = items.openai_model;
-      document.getElementById("geminiKey").value = items.gemini_api_key;
-      document.getElementById("geminiModel").value = items.gemini_model;
-      document.getElementById("ollamaModel").value = items.ollama_model;
-      document.getElementById("systemPrompt").value = items.system_prompt;
-      document.getElementById("debugMode").checked = items.debug_mode;
-      document.getElementById("agentMode").checked = items.agent_mode;
-      document.getElementById("cursorLabel").value = items.cursor_label;
-      updateVisibility();
+    () => {
+      const status = document.getElementById('status');
+      status.textContent = 'Options saved.';
+      status.style.display = 'block';
+      status.className = 'success';
+      setTimeout(() => {
+        status.style.display = 'none';
+      }, 2000);
     }
   );
+}
+
+// Restores select box and checkbox state using the preferences
+// stored in chrome.storage.
+function restoreOptions() {
+  chrome.storage.local.get(DEFAULT_OPTIONS, (items) => {
+    document.getElementById("provider").value = items.provider;
+    document.getElementById("openaiKey").value = items.openai_api_key;
+    document.getElementById("openaiModel").value = items.openai_model;
+    document.getElementById("geminiKey").value = items.gemini_api_key;
+    document.getElementById("geminiModel").value = items.gemini_model;
+    document.getElementById("ollamaModel").value = items.ollama_model;
+    document.getElementById("systemPrompt").value = items.system_prompt;
+    document.getElementById("debugMode").checked = items.debug_mode;
+    document.getElementById("agentMode").checked = items.agent_mode;
+    document.getElementById("cursorLabel").value = items.cursor_label;
+    updateVisibility();
+  });
 }
 
 // Show/hide provider sections based on selection
