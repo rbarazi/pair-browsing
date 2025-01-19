@@ -242,9 +242,25 @@ function findElementBySelector(selector) {
 }
 
 // Initialize cursor in the middle of the viewport when extension is activated
-function initializeCursor() {
+async function initializeCursor() {
   // Only initialize cursor in the top frame
   if (window.top !== window.self) {
+    return;
+  }
+
+  // Wait for document to be ready
+  if (!isDocumentReady()) {
+    // Retry after a short delay if document is not ready
+    await new Promise(resolve => setTimeout(resolve, 500));
+    if (!isDocumentReady()) {
+      console.warn('Document not ready for cursor initialization');
+      return;
+    }
+  }
+
+  // Check if body exists
+  if (!document.body) {
+    console.warn('Document body not available for cursor initialization');
     return;
   }
 
@@ -284,7 +300,10 @@ async function animateCursorTo(targetX, targetY, duration = 500) {
       if (progress < 1) {
         requestAnimationFrame(animate);
       } else {
-        resolve();
+        // Ensure we end exactly at the target position
+        updateCursor(targetX, targetY);
+        // Add a small delay after reaching the target
+        setTimeout(resolve, 100);
       }
     }
 
@@ -316,40 +335,51 @@ async function handleClick(elementData) {
     const originalOutline = element.style.outline;
     element.style.outline = "2px solid red";
 
-    // Animate cursor to target position
-    await animateCursorTo(x, y);
+    try {
+      // Wait for cursor animation to complete
+      await animateCursorTo(x, y);
+      
+      // Show click animation and wait for it
+      await new Promise(resolve => {
+        showClickIndicator(x, y);
+        setTimeout(resolve, 500); // Match the click indicator animation duration
+      });
 
-    // Show click animation
-    showClickIndicator(x, y);
-    // Try native click() if element supports it
-    if (typeof element.click === 'function') {
-      try {
-        element.click();
-        return; // Exit if native click is successful
-      } catch (error) {
-        console.log('Native click() failed:', error);
+      // Try native click() if element supports it
+      if (typeof element.click === 'function') {
+        try {
+          element.click();
+          // Wait for any click-triggered animations or state changes
+          await new Promise(resolve => setTimeout(resolve, 500));
+          return true;
+        } catch (error) {
+          console.log('Native click() failed:', error);
+        }
       }
-    }
 
-    // Trigger events after cursor reaches the target only if native click failed
-    ["mousedown", "mouseup", "click"].forEach((eventType) => {
-      element.dispatchEvent(
-        new MouseEvent(eventType, {
-          view: window,
-          bubbles: true,
-          cancelable: true,
-          clientX: x,
-          clientY: y
-        })
-      );
-    });
+      // Trigger events after cursor reaches the target only if native click failed
+      ["mousedown", "mouseup", "click"].forEach((eventType) => {
+        element.dispatchEvent(
+          new MouseEvent(eventType, {
+            view: window,
+            bubbles: true,
+            cancelable: true,
+            clientX: x,
+            clientY: y
+          })
+        );
+      });
 
-    // Remove highlight after a delay
-    setTimeout(() => {
+      // Wait for events to propagate
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Remove highlight after a delay
       element.style.outline = originalOutline;
-    }, 500);
-
-    return true;
+      return true;
+    } catch (error) {
+      element.style.outline = originalOutline;
+      throw error;
+    }
   } catch (error) {
     console.error("Error in click handler:", error);
     return false;
@@ -588,72 +618,83 @@ async function handleFill(elementData, value) {
     const originalOutline = element.style.outline;
     element.style.outline = "2px solid blue";
 
-    // Animate cursor to target position
-    await animateCursorTo(x, y);
-
-    // Show click indicator
-    showClickIndicator(x, y, "#3399FF");
-
-    // Focus the element
-    element.focus();
-    element.dispatchEvent(new Event("focus", { bubbles: true, composed: true }));
-    element.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-
-    // Clear existing value if it's an input or textarea
-    if (element.tagName === "INPUT" || element.tagName === "TEXTAREA") {
-      element.value = "";
-    }
-
-    // Type the value character by character
-    for (const char of value) {
-      // Create and dispatch keydown event
-      const keydownEvent = new KeyboardEvent("keydown", {
-        key: char,
-        code: `Key${char.toUpperCase()}`,
-        bubbles: true,
-        composed: true,
-        cancelable: true,
+    try {
+      // Wait for cursor animation to complete
+      await animateCursorTo(x, y);
+      
+      // Show click indicator and wait for animation
+      await new Promise(resolve => {
+        showClickIndicator(x, y, "#3399FF");
+        setTimeout(resolve, 500);
       });
-      element.dispatchEvent(keydownEvent);
 
-      // Create and dispatch keypress event
-      const keypressEvent = new KeyboardEvent("keypress", {
-        key: char,
-        code: `Key${char.toUpperCase()}`,
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-      });
-      element.dispatchEvent(keypressEvent);
+      // Focus the element and wait for focus events
+      element.focus();
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      element.dispatchEvent(new Event("focus", { bubbles: true, composed: true }));
+      await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Append the character to the element's value
-      element.value += char;
+      // Clear existing value if it's an input or textarea
+      if (element.tagName === "INPUT" || element.tagName === "TEXTAREA") {
+        element.value = "";
+        element.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
 
-      // Dispatch input event after each character
-      element.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+      // Type the value character by character with delays
+      for (const char of value) {
+        // Create and dispatch keydown event
+        const keydownEvent = new KeyboardEvent("keydown", {
+          key: char,
+          code: `Key${char.toUpperCase()}`,
+          bubbles: true,
+          cancelable: true,
+          composed: true
+        });
+        element.dispatchEvent(keydownEvent);
 
-      // Create and dispatch keyup event
-      const keyupEvent = new KeyboardEvent("keyup", {
-        key: char,
-        code: `Key${char.toUpperCase()}`,
-        bubbles: true,
-        cancelable: true,
-      });
-      element.dispatchEvent(keyupEvent);
+        // Create and dispatch keypress event
+        const keypressEvent = new KeyboardEvent("keypress", {
+          key: char,
+          code: `Key${char.toUpperCase()}`,
+          bubbles: true,
+          cancelable: true,
+          composed: true
+        });
+        element.dispatchEvent(keypressEvent);
 
-      // Add slight delay between characters
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
+        // Update value and dispatch input event
+        element.value += char;
+        element.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
 
-    // Dispatch change event after filling
-    element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+        // Create and dispatch keyup event
+        const keyupEvent = new KeyboardEvent("keyup", {
+          key: char,
+          code: `Key${char.toUpperCase()}`,
+          bubbles: true,
+          cancelable: true,
+          composed: true
+        });
+        element.dispatchEvent(keyupEvent);
 
-    // Remove highlight after a delay
-    setTimeout(() => {
+        // Small delay between characters
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+
+      // Final change event
+      element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+      
+      // Wait for any input-related animations to complete
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Remove highlight
       element.style.outline = originalOutline;
-    }, 500);
-
-    return true;
+      return true;
+    } catch (error) {
+      element.style.outline = originalOutline;
+      throw error;
+    }
   } catch (error) {
     console.error("Error in fill handler:", error);
     return false;

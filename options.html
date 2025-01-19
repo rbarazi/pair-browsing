@@ -72,6 +72,7 @@
       <select id="provider">
         <option value="openai">OpenAI</option>
         <option value="gemini">Google Gemini</option>
+        <option value="ollama">Ollama (Local)</option>
       </select>
     </div>
 
@@ -102,6 +103,17 @@
         <label for="geminiModel">Model Name:</label>
         <input type="text" id="geminiModel" placeholder="Enter model name (e.g., gemini-2.0-flash-exp)">
       </div>
+    </div>
+
+    <div id="ollama-section" class="provider-section">
+      <h3>Ollama Settings</h3>
+      <div class="form-group">
+        <label for="ollamaModel">Model Name:</label>
+        <input type="text" id="ollamaModel" placeholder="Enter model name (e.g., llama3.2-vision)" value="llama3.2-vision">
+      </div>
+      <p class="info-text" style="color: #666; font-size: 0.9em;">
+        Ollama runs locally on http://localhost:11434. Make sure you have Ollama installed and running.
+      </p>
     </div>
 
     <div class="form-group">

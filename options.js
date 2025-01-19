@@ -5,6 +5,7 @@ function saveOptions() {
   const openaiModel = document.getElementById('openaiModel').value
   const geminiKey = document.getElementById('geminiKey').value;
   const geminiModel = document.getElementById('geminiModel').value;
+  const ollamaModel = document.getElementById('ollamaModel').value;
   const systemPrompt = document.getElementById('systemPrompt').value;
   const debugMode = document.getElementById('debugMode').checked;
   const agentMode = document.getElementById('agentMode').checked;
@@ -17,6 +18,7 @@ function saveOptions() {
       openai_model: openaiModel,
       gemini_api_key: geminiKey,
       gemini_model: geminiModel,
+      ollama_model: ollamaModel,
       system_prompt: systemPrompt,
       debug_mode: debugMode,
       agent_mode: agentMode,
@@ -46,6 +48,7 @@ function restoreOptions() {
       openai_model: "gpt-4o-mini",
       gemini_api_key: "",
       gemini_model: "gemini-2.0-flash-exp",
+      ollama_model: "llama3.2-vision",
       system_prompt: `You are a precise browser automation agent that interacts with websites through structured commands. Your role is to:
 1. Analyze the provided webpage elements and structure
 2. Think through the user's request and identify if you need more than one step to accomplish it. 
@@ -165,6 +168,7 @@ Remember: Your responses must be valid JSON matching the specified format. Each 
       document.getElementById("openaiModel").value = items.openai_model;
       document.getElementById("geminiKey").value = items.gemini_api_key;
       document.getElementById("geminiModel").value = items.gemini_model;
+      document.getElementById("ollamaModel").value = items.ollama_model;
       document.getElementById("systemPrompt").value = items.system_prompt;
       document.getElementById("debugMode").checked = items.debug_mode;
       document.getElementById("agentMode").checked = items.agent_mode;
@@ -179,6 +183,7 @@ function updateVisibility() {
   const provider = document.getElementById('provider').value;
   document.getElementById('openai-section').style.display = provider === 'openai' ? 'block' : 'none';
   document.getElementById('gemini-section').style.display = provider === 'gemini' ? 'block' : 'none';
+  document.getElementById('ollama-section').style.display = provider === 'ollama' ? 'block' : 'none';
 }
 
 document.addEventListener('DOMContentLoaded', restoreOptions);

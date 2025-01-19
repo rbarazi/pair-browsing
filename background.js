@@ -77,48 +77,59 @@ async function cleanupExtensionMarkup(tabId) {
 
 // Function to wait for page load completion
 async function waitForPageLoad(tabId) {
-  return new Promise((resolve) => {
-    // First, check if the page is already complete
-    chrome.tabs.get(tabId, async (tab) => {
-      if (tab.status === 'complete') {
-        // Give a small delay to ensure rendering
-        await new Promise(r => setTimeout(r, 50));
-        // Double check document readiness through content script
-        try {
-          const response = await chrome.tabs.sendMessage(tabId, { type: "CHECK_DOCUMENT_READY" });
-          if (response.ready) {
-            resolve();
-            return;
-          }
-        } catch (error) {
-          console.warn('Failed to check document ready state:', error);
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      resolve(); // Resolve anyway after timeout to prevent hanging
+    }, 10000); // 10 second timeout
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      chrome.tabs.onUpdated.removeListener(updatedListener);
+    };
+
+    const checkDocumentReady = async () => {
+      try {
+        const response = await chrome.tabs.sendMessage(tabId, { type: "CHECK_DOCUMENT_READY" });
+        if (response?.ready) {
+          cleanup();
+          resolve();
         }
+      } catch (error) {
+        console.warn('Failed to check document ready state:', error);
+      }
+    };
+
+    // First, check current tab status
+    chrome.tabs.get(tabId, async (tab) => {
+      if (chrome.runtime.lastError) {
+        cleanup();
+        reject(chrome.runtime.lastError);
+        return;
       }
 
-      // If not complete or check failed, listen for the complete status
-      const listener = (updatedTabId, changeInfo) => {
-        if (updatedTabId === tabId && changeInfo.status === 'complete') {
-          chrome.tabs.onUpdated.removeListener(listener);
-          // Give a small delay to ensure rendering
-          setTimeout(async () => {
-            try {
-              // Double check document readiness through content script
-              const response = await chrome.tabs.sendMessage(tabId, { type: "CHECK_DOCUMENT_READY" });
-              if (response.ready) {
-                resolve();
-              } else {
-                // If not ready, wait a bit and resolve anyway to prevent hanging
-                setTimeout(resolve, 100);
-              }
-            } catch (error) {
-              console.warn('Failed to check document ready state:', error);
-              resolve(); // Resolve anyway to prevent hanging
-            }
-          }, 50);
-        }
-      };
-      chrome.tabs.onUpdated.addListener(listener);
+      if (tab.status === 'complete') {
+        // Give a small delay to ensure rendering
+        await new Promise(r => setTimeout(r, 100));
+        await checkDocumentReady();
+      }
     });
+
+    // Listen for tab updates
+    const updatedListener = async (updatedTabId, changeInfo, tab) => {
+      if (updatedTabId === tabId) {
+        if (changeInfo.status === 'complete') {
+          // Give a small delay to ensure rendering
+          await new Promise(r => setTimeout(r, 100));
+          await checkDocumentReady();
+        } else if (changeInfo.status === 'loading') {
+          // Reset any previous ready state
+          console.log('Page started loading, waiting for completion...');
+        }
+      }
+    };
+
+    chrome.tabs.onUpdated.addListener(updatedListener);
   });
 }
 
@@ -176,8 +187,8 @@ async function promptAI(prompt, tabId, port = null, stepCounter = 0, retryCounte
   const screenshotManager = new ScreenshotManager();
   await screenshotManager.initialize();
 
-  const maxSteps = 10; // Set your desired max steps
-  const maxRetries = 5; // Set your desired max retries
+  const maxSteps = 10;
+  const maxRetries = 5;
 
   try {
     // Get interactive elements
@@ -212,18 +223,18 @@ async function promptAI(prompt, tabId, port = null, stepCounter = 0, retryCounte
       // Create action handler instance
       const actionHandler = new ActionHandler(tabId, port);
 
-      // Loop through and execute each action in sequence
+      // Execute actions sequentially with proper waiting
       for (const actionData of responseData.actions) {
         // Send action description to sidebar
-        // Handle the current action
-        await actionHandler.handleAction(actionData);
         sendSidebarMessage(port,`Action ${responseData.actions.indexOf(actionData)+1}/${responseData.actions.length}: ${actionData.description}`);
-
-        // Wait for the page to fully load and render after each action
-        // await waitForPageLoad(tabId);
-
-        // wait for 2 second
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Wait for the action to complete
+        try {
+          await actionHandler.handleAction(actionData);
+        } catch (error) {
+          console.error('Action failed:', error);
+          throw error;
+        }
       }
 
       // Evaluate the task that was just done
@@ -308,9 +319,22 @@ chrome.runtime.onConnect.addListener((port) => {
     chrome.tabs.query({ active: true, currentWindow: true }, async ([tab]) => {
       if (tab) {
         try {
-          await chrome.tabs.sendMessage(tab.id, { type: "INIT_CURSOR" });
+          await initializeCursorWithRetry(tab.id);
         } catch (error) {
           console.warn('Failed to initialize cursor:', error);
+        }
+      }
+    });
+
+    // Listen for tab updates to reinitialize cursor when needed
+    chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+      if (changeInfo.status === 'complete') {
+        try {
+          // Wait a bit for the page to stabilize
+          await new Promise(resolve => setTimeout(resolve, 500));
+          await initializeCursorWithRetry(tabId);
+        } catch (error) {
+          console.warn('Failed to reinitialize cursor on tab update:', error);
         }
       }
     });
@@ -401,6 +425,9 @@ async function sendPromptAndScreenshotToServer(prompt, base64Screenshot, stringi
     if (provider === 'openai') {
       response = await sendToOpenAI();
       console.log('OpenAI Response:', response);
+    } else if (provider === 'ollama') {
+      response = await sendToOllama();
+      console.log('Ollama Response:', response);
     } else {
       response = await sendToGemini();
       console.log('Gemini Response:', response);
@@ -610,6 +637,96 @@ ${lastMessage.elements}
   };
 }
 
+// Add Ollama support
+async function sendToOllama() {
+  const { ollama_model, system_prompt } = await chrome.storage.local.get({
+    ollama_model: "llama3.2-vision",
+    system_prompt: "",
+  });
+
+  console.log("Preparing Ollama request");
+
+  const aiHistory = await conversationStorage.getAllHistory();
+  // get the last message from the history
+  const lastMessage = aiHistory[aiHistory.length - 1];
+  // loop through the history messages except for the last one and add them to the messages array
+  let messages = aiHistory.slice(0, -1).map((message) => {
+    if (message.role === "user") {
+      return {
+        role: "user",
+        content: message.content
+      };
+    } else if (message.role === "assistant") {
+      return {
+        role: "assistant",
+        content: message.content
+      };
+    }
+    return message;
+  });
+
+  // add the last message to the messages array
+  messages.push({
+    role: "user",
+    content: [
+      {
+        type: "text",
+        text: `
+Your task is: ${lastMessage.content}
+Interactive elements:
+${lastMessage.elements}
+`,
+      },
+      { type: "image_url", image_url: lastMessage.screenshot },
+    ],
+  });
+
+  const OLLAMA_API_ENDPOINT = "http://localhost:11434/v1/chat/completions";
+  const requestBody = {
+    model: ollama_model,
+    messages: [
+      {
+        role: "system",
+        content: system_prompt,
+      },
+      ...messages,
+    ],
+    max_tokens: 1000,
+    response_format: {
+      type: "json_schema",
+      schema: BROWSER_AUTOMATION_SCHEMA,
+    },
+  };
+
+  console.log("Sending request to Ollama API");
+  const response = await fetch(OLLAMA_API_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      // Authorization: `Bearer ollama`,
+    },
+    body: JSON.stringify(requestBody),
+  });
+
+  console.log("Received response from Ollama API");
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => null);
+    console.error("Ollama API error:", errorData);
+    throw new Error(
+      `Ollama API error: ${response.statusText}${
+        errorData ? " - " + JSON.stringify(errorData) : ""
+      }`
+    );
+  }
+
+  const data = await response.json();
+  console.log("Successfully parsed Ollama response");
+  return {
+    response: data.choices[0].message.content,
+    success: true,
+  };
+}
+
 // Update Gemini validation
 async function sendToGemini() {
   const {
@@ -750,23 +867,48 @@ class ActionHandler {
       throw new Error(`Unknown action type: ${actionData.action}`);
     }
 
-    await handler(actionData);
+    // Wait for action to complete and get response
+    const response = await handler(actionData);
+    
+    // Wait for page to stabilize after action
+    await waitForPageLoad(this.tabId);
+    
+    // Additional delay to ensure animations complete
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    return response;
   }
 
   async handleClick({ index }) {
     sendDebugMessage(this.port, `Clicking element at index ${index}`);
-    await chrome.tabs.sendMessage(this.tabId, {
-      type: "PERFORM_CLICK",
-      index
+    return new Promise((resolve, reject) => {
+      chrome.tabs.sendMessage(this.tabId, {
+        type: "PERFORM_CLICK",
+        index
+      }, response => {
+        if (chrome.runtime.lastError) {
+          reject(chrome.runtime.lastError);
+        } else {
+          resolve(response);
+        }
+      });
     });
   }
 
   async handleFill({ index, value }) {
     sendDebugMessage(this.port, `Filling form field at index ${index}`);
-    await chrome.tabs.sendMessage(this.tabId, {
-      type: "PERFORM_FILL",
-      index,
-      value
+    return new Promise((resolve, reject) => {
+      chrome.tabs.sendMessage(this.tabId, {
+        type: "PERFORM_FILL",
+        index,
+        value
+      }, response => {
+        if (chrome.runtime.lastError) {
+          reject(chrome.runtime.lastError);
+        } else {
+          resolve(response);
+        }
+      });
     });
   }
 
@@ -842,6 +984,22 @@ async function getInteractiveElements(tabId) {
   } catch (error) {
     console.error('Failed to get page data:', error);
     throw new Error('Failed to analyze page structure: ' + error.message);
+  }
+}
+
+// Helper function to initialize cursor with retries
+async function initializeCursorWithRetry(tabId, maxAttempts = 3) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      await chrome.tabs.sendMessage(tabId, { type: "INIT_CURSOR" });
+      return;
+    } catch (error) {
+      console.warn(`Cursor initialization attempt ${attempt + 1} failed:`, error);
+      if (attempt === maxAttempts - 1) {
+        throw error;
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
   }
 }
 
