@@ -223,6 +223,13 @@ async function promptAI(prompt, tabId, port = null, stepCounter = 0, retryCounte
       // Create action handler instance
       const actionHandler = new ActionHandler(tabId, port);
 
+      // Check for done action first
+      const doneAction = responseData.actions.find(action => action.action === 'done');
+      if (doneAction) {
+        sendSidebarMessage(port, `Task completed: ${doneAction.description}`);
+        return { success: true, response, isDone: true };
+      }
+
       // Execute actions sequentially with proper waiting
       for (const actionData of responseData.actions) {
         // Send action description to sidebar
@@ -242,7 +249,7 @@ async function promptAI(prompt, tabId, port = null, stepCounter = 0, retryCounte
       const resultScreenshotUrl = await screenshotManager.captureScreenshot(tabId);
       const resultStringifiedInteractiveElements = await getInteractiveElements(tabId);
       const evaluationResponse = await sendPromptAndScreenshotToServer(
-        `Executed task: "${prompt}". Evaluate the screenshot and see if it looks correct. No popups open or autocomplete selections that needs to be dealt with. Adjust the next_goal to resolve any issues before moving on the next task.`,
+        `Evaluate the task: <evaluated-task>${prompt}</evaluated-task>.`,
         resultScreenshotUrl,
         resultStringifiedInteractiveElements
       );
@@ -483,7 +490,7 @@ const BROWSER_AUTOMATION_SCHEMA = {
               "scroll_down",
               "scroll_up",
               "send_keys",
-              "extract_content",
+              "done"
             ],
             description: "The type of action to perform",
           },
@@ -519,12 +526,6 @@ const BROWSER_AUTOMATION_SCHEMA = {
           keys: {
             type: "string",
             description: "The keys to send (required for send_keys action)",
-          },
-          format: {
-            type: "string",
-            enum: ["text", "markdown", "html"],
-            description:
-              "The output format (required for extract_content action)",
           },
         },
         required: ["action", "description"],
@@ -577,9 +578,8 @@ async function sendToOpenAI() {
       {
         type: "text",
         text: `
-Your task is: ${lastMessage.content}
-Interactive elements:
-${lastMessage.elements}
+<task>${lastMessage.content}</task>
+<interactive_elements>${lastMessage.elements}</interactive_elements>
 `,
       },
       { type: "image_url", image_url: { url: lastMessage.screenshot } },
@@ -744,102 +744,135 @@ async function sendToGemini() {
     throw new Error("Gemini API key not set. Please set your API key in the extension options.");
   }
 
-  try {
-    const GEMINI_API_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${gemini_model}:generateContent?key=${gemini_api_key}`;
+  const maxRetries = 3;
+  let retryCount = 0;
 
-    const aiHistory = await conversationStorage.getAllHistory();
-    // get the last message from the history
-    const lastMessage = aiHistory[aiHistory.length - 1];
-    // loop through the history messages except for the last one and add them to the messages array
-    let messages = aiHistory.slice(0, -1).map(message => {
-      if (message.role === "user") {
-        return {
-          role: "user",
-          parts: [{ text: message.content }],
-        };
-      } else if (message.role === "assistant") {
-        return {
-          role: "model",
-          parts: [{ text: message.content }],
-        };
-      }
-      return message;
-    });
+  while (retryCount < maxRetries) {
+    try {
+      const GEMINI_API_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${gemini_model}:generateContent?key=${gemini_api_key}`;
 
+      const aiHistory = await conversationStorage.getAllHistory();
+      // get the last message from the history
+      const lastMessage = aiHistory[aiHistory.length - 1];
+      // loop through the history messages except for the last one and add them to the messages array
+      let messages = aiHistory.slice(0, -1).map(message => {
+        if (message.role === "user") {
+          return {
+            role: "user",
+            parts: [{ text: message.content }],
+          };
+        } else if (message.role === "assistant") {
+          return {
+            role: "model",
+            parts: [{ text: message.content }],
+          };
+        }
+        return message;
+      });
 
-    // add the last message to the messages array
-    messages.push({
-      role: "user",
-      parts: [
-        {
-          text: `
+      // add the last message to the messages array
+      messages.push({
+        role: "user",
+        parts: [
+          {
+            text: `
 Your task is: ${lastMessage.content}
 Interactive elements:
 ${lastMessage.elements}
 `,
-        },
-        {
-          inline_data: {
-            mime_type: "image/png",
-            data: lastMessage.screenshot.replace(
-              /^data:image\/[a-z]+;base64,/,
-              ""
-            ),
           },
+          {
+            inline_data: {
+              mime_type: "image/png",
+              data: lastMessage.screenshot.replace(
+                /^data:image\/[a-z]+;base64,/,
+                ""
+              ),
+            },
+          },
+        ],
+      });
+
+      // Create the request body
+      const requestBody = {
+        system_instruction: {
+          parts:{
+            text: system_prompt
+          }
         },
-      ],
-    });
-
-    // Create the request body
-    const requestBody = {
-      system_instruction: {
-        parts:{
-          text: system_prompt
+        contents: [messages],
+        generationConfig: {
+          temperature: 0.4,
+          topK: 40,
+          topP: 0.95,
+          maxOutputTokens: 1024,
+          responseMimeType: "application/json",
+          responseSchema: BROWSER_AUTOMATION_SCHEMA
         }
-      },
-      contents: [messages],
-      generationConfig: {
-        temperature: 0.4,
-        topK: 40,
-        topP: 0.95,
-        maxOutputTokens: 1024,
-        responseMimeType: "application/json",
-        responseSchema: BROWSER_AUTOMATION_SCHEMA
+      };
+
+      console.log('Sending request to Gemini API');
+      const response = await fetch(GEMINI_API_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      console.log('Received response from Gemini API');
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        console.error('Gemini API error:', errorData);
+        
+        // Check if it's a resource exhaustion error
+        if (response.status === 429) {
+          retryCount++;
+          if (retryCount < maxRetries) {
+            // Notify user about retry through sidebar
+            if (global.sidebarPort) {
+              global.sidebarPort.postMessage({
+                type: "ASSISTANT_MESSAGE",
+                message: `Gemini API rate limit reached. Taking a 10-second break before retry ${retryCount}/${maxRetries}...`
+              });
+            }
+            // Wait for 10 seconds before retrying
+            await new Promise(resolve => setTimeout(resolve, 10000));
+            continue;
+          }
+        }
+        throw new Error(`API error: ${response.statusText}${errorData ? ' - ' + JSON.stringify(errorData) : ''}`);
       }
-    };
 
-    console.log('Sending request to Gemini API');
-    const response = await fetch(GEMINI_API_ENDPOINT, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(requestBody)
-    });
+      const data = await response.json();
+      console.log('Successfully parsed Gemini response', data);
+      let content = data.candidates[0].content.parts[0].text;
 
-    console.log('Received response from Gemini API');
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => null);
-      console.error('Gemini API error:', errorData);
-      throw new Error(`API error: ${response.statusText}${errorData ? ' - ' + JSON.stringify(errorData) : ''}`);
+      // Extract JSON from response if wrapped in markdown
+      if (content.includes("```json")) {
+        content = content.split("```json")[1].split("```")[0].trim();
+      }
+
+      return {
+        response: content,
+        success: true
+      };
+    } catch (error) {
+      console.error('Error in Gemini request:', error);
+      if (retryCount >= maxRetries - 1) {
+        throw new Error(`Gemini API error: ${error.message}`);
+      }
+      retryCount++;
+      // Notify user about retry through sidebar
+      if (global.sidebarPort) {
+        global.sidebarPort.postMessage({
+          type: "ASSISTANT_MESSAGE",
+          message: `Error occurred. Taking a 10-second break before retry ${retryCount}/${maxRetries}...`
+        });
+      }
+      // Wait for 10 seconds before retrying
+      await new Promise(resolve => setTimeout(resolve, 10000));
     }
-
-    const data = await response.json();
-    console.log('Successfully parsed Gemini response', data);
-    let content = data.candidates[0].content.parts[0].text;
-
-    // Extract JSON from response if wrapped in markdown
-    if (content.includes("```json")) {
-      content = content.split("```json")[1].split("```")[0].trim();
-    }
-
-    return {
-      response: content,
-      success: true
-    };
-  } catch (error) {
-    console.error('Error in Gemini request:', error);
-    throw new Error(`Gemini API error: ${error.message}`);
   }
 }
 
@@ -859,7 +892,7 @@ class ActionHandler {
       scroll_down: this.handleScrollDown.bind(this),
       scroll_up: this.handleScrollUp.bind(this),
       send_keys: this.handleSendKeys.bind(this),
-      extract_content: this.handleExtractContent.bind(this)
+      done: this.handleDone.bind(this)
     };
 
     const handler = actionMap[actionData.action];
@@ -959,14 +992,9 @@ class ActionHandler {
     });
   }
 
-  async handleExtractContent({ format }) {
-    sendDebugMessage(this.port, `Extracting content in ${format} format`);
-    const actionResponse = await chrome.tabs.sendMessage(this.tabId, {
-      type: "EXTRACT_CONTENT",
-      format
-    });
-    sendDebugMessage(this.port, `Extracted content: ${actionResponse.content}`);
-    console.log('Extracted content:', actionResponse.content);
+  async handleDone({ description }) {
+    sendDebugMessage(this.port, `Task completed: ${description}`);
+    return { success: true, isDone: true };
   }
 }
 

@@ -853,28 +853,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         console.error("Error sending keys:", error);
         sendResponse({ success: false, error: error.message });
       }
-    } else if (message.type === "EXTRACT_CONTENT") {
-      try {
-        let content;
-        if (message.format === "text") {
-          content = document.body.innerText;
-        } else if (message.format === "markdown") {
-          // Simple HTML to Markdown conversion
-          content = document.body.innerHTML
-            .replace(/<h[1-6]>(.*?)<\/h[1-6]>/g, "# $1\n")
-            .replace(/<p>(.*?)<\/p>/g, "$1\n")
-            .replace(/<a href="(.*?)">(.*?)<\/a>/g, "[$2]($1)")
-            .replace(/<strong>(.*?)<\/strong>/g, "**$1**")
-            .replace(/<em>(.*?)<\/em>/g, "*$1*")
-            .replace(/<.*?>/g, "");
-        } else {
-          content = document.body.innerHTML;
-        }
-        sendResponse({ success: true, content: content });
-      } catch (error) {
-        console.error("Error extracting content:", error);
-        sendResponse({ success: false, error: error.message });
-      }
     } else if (message.type === "GET_PAGE_MARKUP") {
       console.log("Starting page markup analysis...");
 

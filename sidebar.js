@@ -205,9 +205,6 @@ function displayAIResponse(clickData) {
     case "send_keys":
       addMessage(`Action: Sending keys "${clickData.keys}"`);
       break;
-    case "extract_content":
-      addMessage(`Action: Extracting content in ${clickData.format} format`);
-      break;
   }
 
   // If there's a next action planned, show it
