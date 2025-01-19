@@ -4,6 +4,9 @@ import { conversationStorage } from './storage.js';
 // Store active connections
 const ports = new Map();
 
+// Track active window for each port
+const portWindows = new Map();
+
 // Helper function to send messages to sidebar
 async function sendDebugMessage(port, message) {
   // Get debug mode setting
@@ -307,6 +310,18 @@ async function promptAI(prompt, tabId, port = null, stepCounter = 0, retryCounte
   }
 }
 
+// Function to update session state in tab
+async function updateTabSessionState(tabId, state) {
+  try {
+    await chrome.tabs.sendMessage(tabId, { 
+      type: "SESSION_STATE", 
+      state: state 
+    });
+  } catch (error) {
+    console.warn('Failed to update tab session state:', error);
+  }
+}
+
 // Handle connection from sidebar
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === "sidebar") {
@@ -317,29 +332,60 @@ chrome.runtime.onConnect.addListener((port) => {
     const portId = Date.now().toString();
     ports.set(portId, port);
     
-    port.onDisconnect.addListener(() => {
+    // Get and store the current window ID for this port
+    chrome.windows.getCurrent().then(window => {
+      portWindows.set(portId, window.id);
+      // Set active state for current tab
+      chrome.tabs.query({ active: true, windowId: window.id }, async ([tab]) => {
+        if (tab) {
+          await updateTabSessionState(tab.id, "active");
+        }
+      });
+    });
+    
+    port.onDisconnect.addListener(async () => {
+      const windowId = portWindows.get(portId);
       ports.delete(portId);
+      portWindows.delete(portId);
       console.log(`Port disconnected: ${portId}`);
+      
+      // Get the current active tab in the same window
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, windowId });
+        if (tab) {
+          // Update session state and clean up extension markup
+          await updateTabSessionState(tab.id, "inactive");
+          await cleanupExtensionMarkup(tab.id);
+        }
+      } catch (error) {
+        console.error("Error during cleanup on disconnect:", error);
+      }
     });
 
     // Initialize cursor when sidebar connects
-    chrome.tabs.query({ active: true, currentWindow: true }, async ([tab]) => {
-      if (tab) {
-        try {
-          await initializeCursorWithRetry(tab.id);
-        } catch (error) {
-          console.warn('Failed to initialize cursor:', error);
+    chrome.windows.getCurrent().then(window => {
+      chrome.tabs.query({ active: true, windowId: window.id }, async ([tab]) => {
+        if (tab) {
+          try {
+            await initializeCursorWithRetry(tab.id);
+          } catch (error) {
+            console.warn('Failed to initialize cursor:', error);
+          }
         }
-      }
+      });
     });
 
     // Listen for tab updates to reinitialize cursor when needed
     chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-      if (changeInfo.status === 'complete') {
+      // Only handle tabs in the window where this sidebar is open
+      const windowId = portWindows.get(portId);
+      if (tab.windowId === windowId && changeInfo.status === 'complete') {
         try {
           // Wait a bit for the page to stabilize
           await new Promise(resolve => setTimeout(resolve, 500));
           await initializeCursorWithRetry(tabId);
+          // Update session state for the new page
+          await updateTabSessionState(tabId, "active");
         } catch (error) {
           console.warn('Failed to reinitialize cursor on tab update:', error);
         }
@@ -349,9 +395,24 @@ chrome.runtime.onConnect.addListener((port) => {
     port.onMessage.addListener(async (message) => {
       console.log('Received message in background:', message);
       if (message.type === "PROMPT_AI") {
+        // Get the window ID for this port
+        const portId = Array.from(ports.entries()).find(([id, p]) => p === port)?.[0];
+        const windowId = portWindows.get(portId);
+        
+        // Get the active tab in the correct window
+        const [tab] = await chrome.tabs.query({ active: true, windowId });
+        if (!tab) {
+          port.postMessage({
+            type: "AI_RESPONSE",
+            success: false,
+            error: "No active tab found in the current window"
+          });
+          return;
+        }
+
         const result = await promptAI(
           message.prompt,
-          message.tabId,
+          tab.id,
           port,
           []
         );
@@ -362,7 +423,19 @@ chrome.runtime.onConnect.addListener((port) => {
           error: result.success ? undefined : result.error,
         });
       } else if (message.type === "RESET_SESSION") {
-        await resetSession(port, message.tabId);
+        // Get the window ID for this port
+        const portId = Array.from(ports.entries()).find(([id, p]) => p === port)?.[0];
+        const windowId = portWindows.get(portId);
+        
+        // Get the active tab in the correct window
+        const [tab] = await chrome.tabs.query({ active: true, windowId });
+        if (tab) {
+          await updateTabSessionState(tab.id, "inactive");
+        }
+        await resetSession(port, tab?.id);
+        if (tab) {
+          await updateTabSessionState(tab.id, "active");
+        }
       }
     });
   }

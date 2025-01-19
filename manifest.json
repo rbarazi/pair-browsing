@@ -9,7 +9,8 @@
     "tabs",
     "scripting",
     "sidePanel",
-    "unlimitedStorage"
+    "unlimitedStorage",
+    "windows"
   ],
   "host_permissions": [
     "<all_urls>"

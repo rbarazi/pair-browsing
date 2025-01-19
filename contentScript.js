@@ -7,6 +7,9 @@ let cursorElement = null;
 let interactiveElementsMap = [];
 let doHighlightElements =  0;
 
+// Store the original title to restore it later
+let originalTitle = null;
+
 // Function to reset the interactive elements tracking
 function resetInteractiveElements() {
   interactiveElementsMap = [];
@@ -149,7 +152,7 @@ function enhancedCssSelectorForElement(element) {
 // ==========================================================
 /**
  * Locates a DOM element in the current page/extension context, 
- * even if it’s inside an iframe. We walk up the element's 
+ * even if it's inside an iframe. We walk up the element's 
  * "parent" chain to see if we have an iframe ancestor, then 
  * query inside that frame's contentDocument.
  *
@@ -402,27 +405,42 @@ function cleanupExtensionMarkup() {
     highlightedElements.forEach((el) => {
       el.removeAttribute("browser-user-highlight-id");
     });
-  } catch (e) {
-    console.error("Failed to remove highlights:", e);
+
+    // Remove any highlight overlays
+    const overlays = document.querySelectorAll(
+      'div[style*="position: absolute"][style*="z-index: 999999"]'
+    );
+    overlays.forEach((overlay) => overlay.remove());
+
+    // Remove any debug screenshot overlays
+    const debugOverlays = document.querySelectorAll(
+      'div[style*="position: fixed"][style*="z-index: 10000"]'
+    );
+    debugOverlays.forEach((overlay) => overlay.remove());
+
+    // Remove any click indicators
+    const indicators = document.querySelectorAll(
+      'div[style*="position: fixed"][style*="border-radius: 50%"]'
+    );
+    indicators.forEach((indicator) => indicator.remove());
+
+    // Remove any cursor elements
+    removeCursor();
+
+    // Remove any tooltip elements
+    const tooltips = document.querySelectorAll('.playwright-tooltip');
+    tooltips.forEach(tooltip => tooltip.remove());
+
+    // Remove any extension-added styles
+    const extensionStyles = document.querySelectorAll('style[data-extension="playwright"]');
+    extensionStyles.forEach(style => style.remove());
+
+    // Remove any extension-added classes from body
+    document.body.classList.remove('playwright-hover-mode');
+    document.body.classList.remove('playwright-highlight-mode');
+  } catch (error) {
+    console.error("Error during cleanup:", error);
   }
-
-  // Remove any highlight overlays
-  const overlays = document.querySelectorAll(
-    'div[style*="position: absolute"][style*="z-index: 999999"]'
-  );
-  overlays.forEach((overlay) => overlay.remove());
-
-  // Remove any debug screenshot overlays
-  const debugOverlays = document.querySelectorAll(
-    'div[style*="position: fixed"][style*="z-index: 10000"]'
-  );
-  debugOverlays.forEach((overlay) => overlay.remove());
-
-  // Remove any click indicators
-  const indicators = document.querySelectorAll(
-    'div[style*="position: fixed"][style*="border-radius: 50%"]'
-  );
-  indicators.forEach((indicator) => indicator.remove());
 }
 
 function createSelectorMap(elementTree) {
@@ -738,14 +756,39 @@ function isDocumentReady() {
   return true;
 }
 
+// Function to modify the tab title for active session
+function setActiveSessionTitle() {
+  if (!originalTitle) {
+    originalTitle = document.title;
+  }
+  document.title = `🤖 ${originalTitle}`;
+}
+
+// Function to restore the original tab title
+function restoreOriginalTitle() {
+  if (originalTitle) {
+    document.title = originalTitle;
+    originalTitle = null;
+  }
+}
+
 // Update the message listener
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   try {
     if (message.type === "INIT_CURSOR") {
       initializeCursor();
+      setActiveSessionTitle();
       sendResponse({ success: true });
     } else if (message.type === "CLEANUP_MARKUP") {
       cleanupExtensionMarkup();
+      restoreOriginalTitle();
+      sendResponse({ success: true });
+    } else if (message.type === "SESSION_STATE") {
+      if (message.state === "active") {
+        setActiveSessionTitle();
+      } else {
+        restoreOriginalTitle();
+      }
       sendResponse({ success: true });
     } else if (message.type === "CHECK_DOCUMENT_READY") {
       sendResponse({ success: true, ready: isDocumentReady() });
@@ -1022,4 +1065,11 @@ function showClickIndicator(x, y, color = "#FF5733") {
   setTimeout(() => {
     indicator.remove();
   }, 500);
+}
+
+function removeCursor() {
+  if (cursorElement) {
+    cursorElement.remove();
+    cursorElement = null;
+  }
 }
