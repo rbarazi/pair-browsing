@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "properties": {
+    "evaluation": {
+      "type": "string",
+      "enum": [
+        "success",
+        "failure"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    },
+    "alternative": {
+      "type": "string"
+    },
+    "confidence": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "evaluation",
+    "reason",
+    "confidence"
+  ]
+}

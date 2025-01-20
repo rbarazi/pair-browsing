@@ -1,0 +1,39 @@
+{
+  "type": "object",
+  "properties": {
+    "action_plan": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "browser_action",
+              "checkpoint"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "success_criteria": {
+            "type": "string"
+          },
+          "confidence_level": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "type",
+          "description",
+          "success_criteria",
+          "confidence_level"
+        ]
+      }
+    }
+  },
+  "required": [
+    "action_plan"
+  ],
+  "description": "Schema describing the structure of the AI agent's action plan response."
+}

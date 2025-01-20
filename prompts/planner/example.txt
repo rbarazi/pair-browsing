@@ -1,0 +1,45 @@
+<task>Find flights from Toronto to Dubai for 2 adults from Feb 15 to March 14</task>
+<interactive-elements>
+0[:]<div role="button" tabindex="0" aria-label="Open main navigation"></div>
+1[:]<a aria-label="Go to the kayak homepage"></a>
+2[:]<div role="button" tabindex="0" aria-label="Open Trips drawer"></div>
+3[:]<div role="button" tabindex="0"></div>
+4[:]<li role="menuitem">Flights</li>
+5[:]<a aria-label="Search for flights" tabindex="0"></a>
+_[:]Flights
+6[:]<li role="menuitem">Stays</li>
+7[:]<a aria-label="Search for hotels" tabindex="-1"></a>
+_[:]Stays
+8[:]<li role="menuitem">Cars</li>
+9[:]<a aria-label="Search for cars" tabindex="-1"></a>
+_[:]Cars
+10[:]<li role="menuitem">Packages</li>
+11[:]<a aria-label="Search for packages" tabindex="-1"></a>
+_[:]Packages
+12[:]<div role="radio" tabindex="0">Round-trip</div>
+_[:]Round-trip
+13[:]<div role="radio" tabindex="-1">One-way</div>
+_[:]One-way
+14[:]<div role="radio" tabindex="-1">Multi-city</div>
+_[:]Multi-city
+15[:]<div role="button" tabindex="0">All airports, Montreal, Quebec, Canada, (YMQ)</div>
+_[:]All airports, Montreal, Quebec, Canada, (YMQ)
+16[:]<input tabindex="-1" aria-label="All airports, Montreal, Quebec, Canada, (YMQ)"></input>
+17[:]<div role="button" tabindex="0" aria-label="Swap departure airport and destination airport"></div>
+18[:]<div role="button" tabindex="0">All airports, Orlando, Florida, United States, (ORL)</div>
+_[:]All airports, Orlando, Florida, United States, (ORL)
+19[:]<input tabindex="-1" aria-label="All airports, Orlando, Florida, United States, (ORL)"></input>
+20[:]<div role="button" tabindex="0" aria-label="Select dates">Tue 2/25
+–
+Tue 3/4</div>
+_[:]Tue 2/25
+_[:]–
+_[:]Tue 3/4
+21[:]<div tabindex="0" role="button">7 travelers, Economy, 0 bags</div>
+_[:]7 travelers, Economy, 0 bags
+22[:]<button role="button" tabindex="0" title="Search" type="submit" aria-label="Search">Search</button>
+_[:]Search
+23[:]<label>Direct flights only</label>
+_[:]Direct flights only
+24[:]<input tabindex="0" type="checkbox" role="switch" value="false"></input>
+</interactive-elements>

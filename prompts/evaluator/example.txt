@@ -1,0 +1,164 @@
+<interactive-elements>
+"33[:]<div role="button" tabindex="0" aria-label="Open main navigation"></div>
+34[:]<a aria-label="Go to the kayak homepage"></a>
+35[:]<div role="button" tabindex="0" aria-label="Open Trips drawer"></div>
+36[:]<div role="button" tabindex="0">Sign in</div>
+_[:]Sign in
+_[:]Flights
+_[:]Stays
+_[:]Cars
+_[:]Packages
+_[:]Plan your trip
+_[:]Explore
+_[:]Flight Tracker
+_[:]Travel tips
+_[:]KAYAK for Business
+_[:]NEW
+_[:]Trips
+_[:]English
+_[:]$
+_[:]United States dollar
+_[:]Feedback
+_[:]Compare 100s of sites at once
+_[:].
+37[:]<li role="menuitem">Flights</li>
+38[:]<a aria-label="Search for flights" tabindex="0"></a>
+_[:]Flights
+39[:]<li role="menuitem">Stays</li>
+40[:]<a aria-label="Search for hotels" tabindex="-1"></a>
+_[:]Stays
+41[:]<li role="menuitem">Cars</li>
+42[:]<a aria-label="Search for cars" tabindex="-1"></a>
+_[:]Cars
+43[:]<li role="menuitem">Packages</li>
+44[:]<a aria-label="Search for packages" tabindex="-1"></a>
+_[:]Packages
+45[:]<div role="combobox" aria-expanded="false" tabindex="0" aria-label="Trip type Round-trip">Round-trip</div>
+_[:]Round-trip
+46[:]<div role="button" tabindex="0">0 bags</div>
+_[:]0 bags
+_[:]Montreal, Quebec, Canada (YMQ)
+47[:]<div role="button" tabindex="-1" aria-label="Remove value"></div>
+48[:]<div role="button" tabindex="0" aria-label="Swap departure airport and destination airport"></div>
+_[:]Orlando, Florida, United States (ORL)
+49[:]<div role="button" tabindex="-1" aria-label="Remove value"></div>
+50[:]<div role="button" tabindex="0" aria-label="Departure">Tue 2/25</div>
+_[:]Tue 2/25
+_[:]–
+51[:]<div role="button" tabindex="0" aria-label="Return">Tue 3/4</div>
+_[:]Tue 3/4
+52[:]<div role="combobox" aria-expanded="false" tabindex="0" aria-label="Trip type">7 travelers, Economy</div>
+_[:]7 travelers, Economy
+53[:]<button role="button" tabindex="0" title="" type="submit" aria-label="Search"></button>
+_[:]Compare vs. KAYAK
+54[:]<input tabindex="0" type="checkbox" name="JFFrontDoorDDom2pax_US_FFDCMP2" value="false"></input>
+55[:]<label>JustFly</label>
+_[:]JustFly
+56[:]<input tabindex="0" type="checkbox" value="false"></input>
+57[:]<label>Direct flights only</label>
+_[:]Direct flights only
+_[:]Your recent searches
+_[:]Montreal
+_[:]Orlando
+_[:]Start date
+_[:]Tue 2/25
+_[:]End date
+_[:]Tue 3/4
+_[:]7 travelers, Economy
+_[:]Round-trip
+_[:]$203
+58[:]<button role="button" tabindex="0" aria-label="Search again"></button>
+_[:]Toronto
+_[:]Tokyo
+_[:]Start date
+_[:]Tue 2/25
+_[:]End date
+_[:]Tue 3/4
+_[:]6 travelers, Economy
+_[:]Round-trip
+_[:]View prices
+_[:]Was $688
+_[:]Start a new search
+59[:]<a role="link" tabindex="0"></a>
+60[:]<a role="link" tabindex="0"></a>
+_[:]Travel deals under $212
+61[:]<a role="link" tabindex="0">Explore more</a>
+_[:]Explore more
+62[:]<ul role="listbox" tabindex="0"></ul>
+63[:]<li role="option" aria-label="Add nearby airports" tabindex="0">Add nearby airports
+All
+Within 70mi of ORL</li>
+_[:]Add nearby airports
+_[:]All
+_[:]Within 70mi of ORL
+64[:]<input tabindex="0" type="checkbox" value="false"></input>
+65[:]<li role="option" aria-label="Daytona Beach, FL" tabindex="0">Daytona Beach, FL
+DAB
+Daytona Beach</li>
+_[:]Daytona Beach, FL
+_[:]DAB
+_[:]Daytona Beach
+66[:]<input tabindex="0" type="checkbox" value="false"></input>
+67[:]<li role="option" aria-label="Melbourne, FL" tabindex="0">Melbourne, FL
+MLB
+Melbourne</li>
+_[:]Melbourne, FL
+_[:]MLB
+_[:]Melbourne
+68[:]<input tabindex="0" type="checkbox" value="false"></input>
+69[:]<li role="option" aria-label="Lakeland, FL" tabindex="0">Lakeland, FL
+LAL
+Lakeland Linder Intl</li>
+_[:]Lakeland, FL
+_[:]LAL
+_[:]Lakeland Linder Intl
+70[:]<input tabindex="0" type="checkbox" value="false"></input>
+71[:]<li role="option" aria-label="Orlando, Florida, United States" tabindex="0">Orlando, Florida, United States
+ORL
+All airports</li>
+72[:]<img alt="city:Orlando, Florida, United States"></img>
+_[:]Orlando, Florida, United States
+_[:]ORL
+_[:]All airports
+73[:]<input tabindex="0" type="checkbox" value="true"></input>
+74[:]<li role="option" aria-label="Tokyo, Japan" tabindex="0">Tokyo, Japan
+TYO
+All airports</li>
+75[:]<img alt="city:Tokyo, Japan"></img>
+_[:]Tokyo, Japan
+_[:]TYO
+_[:]All airports
+76[:]<input tabindex="0" type="checkbox" value="false"></input>
+77[:]<li role="option" aria-label="Paris, France" tabindex="0">Paris, France
+PAR
+All airports</li>
+78[:]<img alt="city:Paris, France"></img>
+_[:]Paris, France
+_[:]PAR
+_[:]All airports
+79[:]<input tabindex="0" type="checkbox" value="false"></input>
+80[:]<li role="option" aria-label="Fort Lauderdale, Florida, United States" tabindex="0">Fort Lauderdale, Florida, United States
+FLL
+Fort Lauderdale</li>
+81[:]<img alt="city:Fort Lauderdale, Florida, United States"></img>
+_[:]Fort Lauderdale, Florida, United States
+_[:]FLL
+_[:]Fort Lauderdale
+82[:]<input tabindex="0" type="checkbox" value="false"></input>
+83[:]<li role="option" aria-label="Vancouver, British Columbia, Canada" tabindex="0">Vancouver, British Columbia, Canada
+YVR
+All airports</li>
+84[:]<img alt="city:Vancouver, British Columbia, Canada"></img>
+_[:]Vancouver, British Columbia, Canada
+_[:]YVR
+_[:]All airports
+85[:]<input tabindex="0" type="checkbox" value="false"></input>
+86[:]<li role="option" aria-label="Can't decide where to go?" tabindex="0">Can't decide where to go?
+Explore your options with anywhere search</li>
+_[:]Can't decide where to go?
+_[:]Explore your options with anywhere search
+</interactive-elements>
+<task> Clear the existing departure and arrival airports</task>
+<success-criteria>
+The fields for departure and arrival airports are empty. This will depend on the design of the Kayak site; some versions show a clear button, others just allow you to type over existing values.
+</success-criteria>

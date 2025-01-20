@@ -7,6 +7,94 @@ const ports = new Map();
 // Track active window for each port
 const portWindows = new Map();
 
+// Shared schema for browser automation responses
+const BROWSER_AUTOMATION_SCHEMA = {
+  type: "object",
+  properties: {
+    current_state: {
+      type: "object",
+      properties: {
+        evaluation_previous_goal: {
+          type: "string",
+          enum: ["Success", "Failed", "Unknown"],
+          description:
+            "Success|Failed|Unknown - Analyze the current elements and the image to check if the previous goals/actions are successful like intended by the task. Ignore the action result. The website is the ground truth. Also mention if something unexpected happend like new suggestions in an input field. Shortly state why/why not",
+        },
+        memory: {
+          type: "string",
+          description:
+            "Description of what has been done and what you need to remember until the end of the task",
+        },
+        next_goal: {
+          type: "string",
+          description:
+            "What needs to be done with the next actions. ONLY RETURN THE NEXT GOAL IF THERE IS ONE, OTHERWISE DO NOT INCLUDE IT",
+        },
+      },
+      required: ["evaluation_previous_goal"],
+    },
+    actions: {
+      type: "array",
+      description: "Sequence of actions to perform",
+      items: {
+        type: "object",
+        properties: {
+          action: {
+            type: "string",
+            enum: [
+              "click",
+              "fill", 
+              "search_google",
+              "go_to_url",
+              "go_back",
+              "scroll_down",
+              "scroll_up",
+              "send_keys",
+              "done"
+            ],
+            description: "The type of action to perform",
+          },
+          description: {
+            type: "string",
+            description:
+              "Clear description of what this specific action will do",
+          },
+          index: {
+            type: "number",
+            description:
+              "The index number of the interactive element to interact with (required for click and fill actions)",
+          },
+          value: {
+            type: "string",
+            description:
+              "The value to fill in the element (required for fill action)",
+          },
+          query: {
+            type: "string",
+            description: "The search query (required for search_google action)",
+          },
+          url: {
+            type: "string",
+            description:
+              "The URL to navigate to (required for go_to_url action)",
+          },
+          amount: {
+            type: "number",
+            description:
+              "The scroll amount in pixels (optional for scroll actions)",
+          },
+          keys: {
+            type: "string",
+            description: "The keys to send (required for send_keys action)",
+          },
+        },
+        required: ["action", "description"],
+      },
+    },
+  },
+  required: ["current_state", "actions"],
+};
+
 // Helper function to send messages to sidebar
 async function sendDebugMessage(port, message) {
   // Get debug mode setting
@@ -32,15 +120,6 @@ async function clearAIHistory() {
   console.log('AI conversation history cleared');
 }
 
-// Update conversation history
-async function updateHistory(newEntry) {
-  try {
-    await conversationStorage.addEntry(newEntry);
-    console.log('History updated:', newEntry);
-  } catch (error) {
-    console.error('Failed to update history:', error);
-  }
-}
 // Reset session state
 async function resetSession(port, tabId) {
   // Clear conversation history
@@ -187,125 +266,27 @@ class ScreenshotManager {
 
 // Function to handle screenshot capture
 async function promptAI(prompt, tabId, port = null, stepCounter = 0, retryCounter = 0) {
-  const screenshotManager = new ScreenshotManager();
-  await screenshotManager.initialize();
-
-  const maxSteps = 10;
-  const maxRetries = 5;
-
+  const taskExecutor = new TaskExecutor(tabId, port);
+  
   try {
-    // Get interactive elements
-    const stringifiedInteractiveElements = await getInteractiveElements(tabId);
-
-    // Capture screenshot
-    const screenshotUrl = await screenshotManager.captureScreenshot(tabId);
-    await screenshotManager.sendDebugScreenshot(tabId, port, screenshotUrl);
-
-    const response = await sendPromptAndScreenshotToServer(
-      prompt,
-      screenshotUrl,
-      stringifiedInteractiveElements
-    );
-    console.log("AI service response received:", response);
-
-    if (response.success) {
-      const responseData = JSON.parse(response.response);
-      await updateHistory({ role: "assistant", content: response.response });
-
-      console.log("Parsed response data:", responseData);
-
-      const state = responseData.current_state;
-      // Send initial task description to sidebar
-      if (stepCounter > 0) {
-        sendSidebarMessage(port,`Step ${stepCounter-1} Evaluation: ${state.evaluation_previous_goal}`);
-        sendSidebarMessage(port,`Step ${stepCounter}: ${state.next_goal}, actions: ${responseData.actions.length}`);
+    // Execute the task using the three-step process
+    const result = await taskExecutor.execute(prompt);
+    
+    if (result.success) {
+      sendSidebarMessage(port, `Task completed successfully`);
+      return { success: true, response: result.response };
+    } else {
+      // If task failed and we haven't exceeded retry limit
+      if (retryCounter < 5) {
+        sendDebugMessage(port, `Retrying task (attempt ${retryCounter + 1})`);
+        return promptAI(prompt, tabId, port, stepCounter, retryCounter + 1);
       } else {
-        sendSidebarMessage(port,`Task started: ${prompt}`);
-      }
-
-      // Create action handler instance
-      const actionHandler = new ActionHandler(tabId, port);
-
-      // Check for done action first
-      const doneAction = responseData.actions.find(action => action.action === 'done');
-      if (doneAction) {
-        sendSidebarMessage(port, `Task completed: ${doneAction.description}`);
-        return { success: true, response, isDone: true };
-      }
-
-      // Execute actions sequentially with proper waiting
-      for (const actionData of responseData.actions) {
-        // Send action description to sidebar
-        sendSidebarMessage(port,`Action ${responseData.actions.indexOf(actionData)+1}/${responseData.actions.length}: ${actionData.description}`);
-        
-        // Wait for the action to complete
-        try {
-          await actionHandler.handleAction(actionData);
-        } catch (error) {
-          console.error('Action failed:', error);
-          throw error;
-        }
-      }
-
-      // Evaluate the task that was just done
-      // get fresh screenshot and interactive elements
-      const resultScreenshotUrl = await screenshotManager.captureScreenshot(tabId);
-      const resultStringifiedInteractiveElements = await getInteractiveElements(tabId);
-      const evaluationResponse = await sendPromptAndScreenshotToServer(
-        `Evaluate the task: <evaluated-task>${prompt}</evaluated-task>.`,
-        resultScreenshotUrl,
-        resultStringifiedInteractiveElements
-      );
-
-      if (evaluationResponse.success) {
-        const evaluationData = JSON.parse(evaluationResponse.response);
-        const evaluationState = evaluationData.current_state;
-
-        if (evaluationState.evaluation_previous_goal === 'Success') {
-          if (!evaluationState.next_goal || evaluationState.next_goal === null) {
-            sendSidebarMessage(
-              port,
-              `Task Completed Successfully: ${evaluationState.evaluation_previous_goal}`
-            );
-            return { success: true, response };
-          } else {
-            stepCounter++;
-            if (stepCounter >= maxSteps) {
-              console.warn('Max steps reached');
-              return { success: false, error: 'Max steps reached' };
-            }
-            sendSidebarMessage(
-              port,
-              `Step: ${stepCounter}`
-            );
-            sendSidebarMessage(
-              port,
-              `Next goal: ${evaluationState.next_goal}`
-            );
-
-            return await promptAI(evaluationState.next_goal, tabId, port, stepCounter, retryCounter);
-          }
-        } else if (evaluationState.evaluation_previous_goal === 'Failed' || evaluationState.evaluation_previous_goal === 'Unknown') {
-          if (evaluationState.next_goal) {
-            sendDebugMessage(
-              port,
-              `Retry: ${retryCounter}`
-            );
-
-            retryCounter++;
-            if (retryCounter >= maxRetries) {
-              console.warn('Max retries reached');
-              return { success: false, error: 'Max retries reached' };
-            }
-            return await promptAI(evaluationState.next_goal, tabId, port, stepCounter, retryCounter);
-          }
-        }
+        sendSidebarMessage(port, `Task failed after ${retryCounter} attempts`);
+        return { success: false, error: "Max retries exceeded" };
       }
     }
-
-    return { success: true, response };
   } catch (error) {
-    console.error('Error handling screenshot capture:', error);
+    console.error('Error executing task:', error);
     return { success: false, error: error.message };
   }
 }
@@ -492,25 +473,49 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 // Function to send prompt + screenshot to AI provider
-async function sendPromptAndScreenshotToServer(prompt, base64Screenshot, stringifiedInteractiveElements = null) {
-  console.log('Starting AI service request with prompt:', prompt);
+async function sendPromptAndScreenshotToServer(prompt, base64Screenshot, stringifiedInteractiveElements = null, promptType = "executor", taskId = null, planStepId = null) {
+  console.log('Starting AI service request with prompt:', prompt, 'type:', promptType);
   
   // Get provider and settings from storage
   const { provider } = await chrome.storage.local.get({ provider: 'openai' });
 
-  updateHistory({ role: 'user', content: prompt, elements: stringifiedInteractiveElements, screenshot: base64Screenshot });
+  // Add conversation entry with task and plan step references
+  await conversationStorage.addConversationEntry(
+    { 
+      role: 'user', 
+      content: prompt, 
+      elements: stringifiedInteractiveElements, 
+      screenshot: base64Screenshot 
+    },
+    taskId,
+    planStepId,
+    promptType
+  );
 
   let response;
   try {
     if (provider === 'openai') {
-      response = await sendToOpenAI();
+      response = await sendToOpenAI(promptType, taskId, planStepId);
       console.log('OpenAI Response:', response);
     } else if (provider === 'ollama') {
-      response = await sendToOllama();
+      response = await sendToOllama(promptType, taskId, planStepId);
       console.log('Ollama Response:', response);
     } else {
-      response = await sendToGemini();
+      response = await sendToGemini(promptType, taskId, planStepId);
       console.log('Gemini Response:', response);
+    }
+
+    // Add AI response to conversation history
+    if (response.success) {
+      await conversationStorage.addConversationEntry(
+        { 
+          role: 'assistant', 
+          content: response.response 
+        },
+        taskId,
+        planStepId,
+        promptType
+      );
     }
   } catch (error) {
     console.error('AI service error:', error);
@@ -520,103 +525,81 @@ async function sendPromptAndScreenshotToServer(prompt, base64Screenshot, stringi
   return response;
 }
 
-// Shared schema for browser automation responses
-const BROWSER_AUTOMATION_SCHEMA = {
-  type: "object",
-  properties: {
-    current_state: {
-      type: "object",
-      properties: {
-        evaluation_previous_goal: {
-          type: "string",
-          enum: ["Success", "Failed", "Unknown"],
-          description:
-            "Success|Failed|Unknown - Analyze the current elements and the image to check if the previous goals/actions are successful like intended by the task. Ignore the action result. The website is the ground truth. Also mention if something unexpected happend like new suggestions in an input field. Shortly state why/why not",
-        },
-        memory: {
-          type: "string",
-          description:
-            "Description of what has been done and what you need to remember until the end of the task",
-        },
-        next_goal: {
-          type: "string",
-          description:
-            "What needs to be done with the next actions. ONLY RETURN THE NEXT GOAL IF THERE IS ONE, OTHERWISE DO NOT INCLUDE IT",
-        },
-      },
-      required: ["evaluation_previous_goal"],
-    },
-    actions: {
-      type: "array",
-      description: "Sequence of actions to perform",
-      items: {
+// Get the appropriate schema based on prompt type
+function getSchemaForPromptType(promptType) {
+  switch (promptType) {
+    case "planner":
+      return {
         type: "object",
         properties: {
-          action: {
-            type: "string",
-            enum: [
-              "click",
-              "fill",
-              "search_google",
-              "go_to_url",
-              "go_back",
-              "scroll_down",
-              "scroll_up",
-              "send_keys",
-              "done"
-            ],
-            description: "The type of action to perform",
-          },
-          description: {
-            type: "string",
-            description:
-              "Clear description of what this specific action will do",
-          },
-          index: {
-            type: "number",
-            description:
-              "The index number of the interactive element to interact with (required for click and fill actions)",
-          },
-          value: {
-            type: "string",
-            description:
-              "The value to fill in the element (required for fill action)",
-          },
-          query: {
-            type: "string",
-            description: "The search query (required for search_google action)",
-          },
-          url: {
-            type: "string",
-            description:
-              "The URL to navigate to (required for go_to_url action)",
-          },
-          amount: {
-            type: "number",
-            description:
-              "The scroll amount in pixels (optional for scroll actions)",
-          },
-          keys: {
-            type: "string",
-            description: "The keys to send (required for send_keys action)",
-          },
+          action_plan: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  enum: ["browser_action", "checkpoint"]
+                },
+                description: {
+                  type: "string"
+                },
+                success_criteria: {
+                  type: "string"
+                },
+                confidence_level: {
+                  type: "number"
+                }
+              },
+              required: ["type", "description", "success_criteria", "confidence_level"]
+            }
+          }
         },
-        required: ["action", "description"],
-      },
-    },
-  },
-  required: ["current_state", "actions"],
-};
+        required: ["action_plan"]
+      };
+    case "evaluator":
+      return {
+        type: "object",
+        properties: {
+          evaluation: {
+            type: "string",
+            enum: ["success", "failure"]
+          },
+          reason: {
+            type: "string"
+          },
+          confidence: {
+            type: "number"
+          }
+        },
+        required: ["evaluation", "reason", "confidence"]
+      };
+    default:
+      return BROWSER_AUTOMATION_SCHEMA;
+  }
+}
+
+// Get the appropriate system prompt based on type
+async function getSystemPromptForType(promptType) {
+  const { system_prompt } = await chrome.storage.local.get({ system_prompt: "" });
+  
+  switch (promptType) {
+    case "planner":
+      return await fetch(chrome.runtime.getURL("prompts/planner/prompt.txt")).then(r => r.text());
+    case "evaluator":
+      return await fetch(chrome.runtime.getURL("prompts/evaluator/prompt.txt")).then(r => r.text());
+    default:
+      return system_prompt;
+  }
+}
 
 // Update the OpenAI schema
-async function sendToOpenAI() {
+async function sendToOpenAI(promptType = "executor", taskId = null, planStepId = null) {
   // Get provider and settings from storage
-  const { openai_api_key, openai_model, system_prompt } =
-    await chrome.storage.local.get({
-      openai_api_key: "",
-      openai_model: "gpt-4o-min",
-      system_prompt: "",
-    });
+  const { openai_api_key, openai_model } = await chrome.storage.local.get({
+    openai_api_key: "",
+    openai_model: "gpt-4o-min"
+  });
 
   console.log("Preparing OpenAI request");
   if (!openai_api_key) {
@@ -625,23 +608,28 @@ async function sendToOpenAI() {
     );
   }
 
-  const aiHistory = await conversationStorage.getAllHistory();
+  // Get filtered conversation history
+  const aiHistory = await conversationStorage.getFilteredHistory(taskId, planStepId, promptType);
+  console.log("AI History:", aiHistory); // Log the history for debugging
+
   // get the last message from the history
   const lastMessage = aiHistory[aiHistory.length - 1];
+  if (!lastMessage || !lastMessage.content) {
+    throw new Error("Last message content is null or undefined");
+  }
+
   // loop through the history messages except for the last one and add them to the messages array
-  let messages = aiHistory.slice(0, -1).map((message) => {
-    if (message.role === "user") {
-      return {
-        role: "user",
-        parts: [{ text: message.content }],
-      };
-    } else if (message.role === "assistant") {
-      return {
-        role: "model",
-        parts: [{ text: message.content }],
-      };
+  let messages = []
+  aiHistory.slice(0, -1).map((message) => {
+    if (promptType != "executor" && message.role === "assistant") {
+      messages.push({
+        role: message.role,
+        content: {
+          type: "text",
+          text: message.content || "",
+        },
+      });
     }
-    return message;
   });
 
   // add the last message to the messages array
@@ -659,13 +647,15 @@ async function sendToOpenAI() {
     ],
   });
 
+  console.log("Messages to send:", messages); // Log the messages for debugging
+
   const OPENAI_API_ENDPOINT = "https://api.openai.com/v1/chat/completions";
   const requestBody = {
     model: openai_model,
     messages: [
       {
         role: "system",
-        content: system_prompt,
+        content: await getSystemPromptForType(promptType),
       },
       ...messages,
     ],
@@ -676,7 +666,7 @@ async function sendToOpenAI() {
         name: "browser_automation_sequence",
         description:
           "Structured response for a sequence of browser automation actions",
-        schema: BROWSER_AUTOMATION_SCHEMA,
+        schema: getSchemaForPromptType(promptType),
       },
     },
   };
@@ -711,15 +701,15 @@ async function sendToOpenAI() {
 }
 
 // Add Ollama support
-async function sendToOllama() {
-  const { ollama_model, system_prompt } = await chrome.storage.local.get({
-    ollama_model: "llama3.2-vision",
-    system_prompt: "",
+async function sendToOllama(promptType = "executor", taskId = null, planStepId = null) {
+  const { ollama_model } = await chrome.storage.local.get({
+    ollama_model: "llama3.2-vision"
   });
 
   console.log("Preparing Ollama request");
 
-  const aiHistory = await conversationStorage.getAllHistory();
+  // Get filtered conversation history
+  const aiHistory = await conversationStorage.getFilteredHistory(taskId, planStepId, promptType);
   // get the last message from the history
   const lastMessage = aiHistory[aiHistory.length - 1];
   // loop through the history messages except for the last one and add them to the messages array
@@ -760,14 +750,14 @@ ${lastMessage.elements}
     messages: [
       {
         role: "system",
-        content: system_prompt,
+        content: await getSystemPromptForType(promptType),
       },
       ...messages,
     ],
     max_tokens: 1000,
     response_format: {
       type: "json_schema",
-      schema: BROWSER_AUTOMATION_SCHEMA,
+      schema: getSchemaForPromptType(promptType),
     },
   };
 
@@ -801,15 +791,13 @@ ${lastMessage.elements}
 }
 
 // Update Gemini validation
-async function sendToGemini() {
+async function sendToGemini(promptType = "executor", taskId = null, planStepId = null) {
   const {
     gemini_api_key,
     gemini_model,
-    system_prompt,
   } = await chrome.storage.local.get({
     gemini_api_key: "",
     gemini_model: "gemini-2.0-flash-exp",
-    system_prompt: "",
   });
 
   console.log('Preparing Gemini request');
@@ -824,7 +812,8 @@ async function sendToGemini() {
     try {
       const GEMINI_API_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${gemini_model}:generateContent?key=${gemini_api_key}`;
 
-      const aiHistory = await conversationStorage.getAllHistory();
+      // Get filtered conversation history
+      const aiHistory = await conversationStorage.getFilteredHistory(taskId, planStepId, promptType);
       // get the last message from the history
       const lastMessage = aiHistory[aiHistory.length - 1];
       // loop through the history messages except for the last one and add them to the messages array
@@ -870,7 +859,7 @@ ${lastMessage.elements}
       const requestBody = {
         system_instruction: {
           parts:{
-            text: system_prompt
+            text: await getSystemPromptForType(promptType)
           }
         },
         contents: [messages],
@@ -880,7 +869,7 @@ ${lastMessage.elements}
           topP: 0.95,
           maxOutputTokens: 1024,
           responseMimeType: "application/json",
-          responseSchema: BROWSER_AUTOMATION_SCHEMA
+          responseSchema: getSchemaForPromptType(promptType)
         }
       };
 
@@ -1101,6 +1090,186 @@ async function initializeCursorWithRetry(tabId, maxAttempts = 3) {
       }
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
+  }
+}
+
+class TaskExecutor {
+  constructor(tabId, port) {
+    this.tabId = tabId;
+    this.port = port;
+    this.actionHandler = new ActionHandler(tabId, port);
+    this.screenshotManager = new ScreenshotManager();
+    this.maxSteps = 10;
+    this.maxRetries = 5;
+    this.currentTaskId = null;
+    this.currentPlanStepId = null;
+  }
+
+  async execute(prompt) {
+    await this.screenshotManager.initialize();
+    let stepCounter = 0;
+    
+    try {
+      // Create a new task
+      this.currentTaskId = await conversationStorage.createTask(prompt);
+      console.log("Created task with ID:", this.currentTaskId);
+      
+      // Step 1: Planning - Get high-level plan
+      const plan = await this.planTask(prompt);
+      console.log("Generated plan:", plan);
+      
+      // Execute the plan
+      for (const planStep of plan.action_plan) {
+        // Create a plan step record
+        this.currentPlanStepId = await conversationStorage.createPlanStep(
+          this.currentTaskId,
+          planStep.description,
+          planStep.type
+        );
+        console.log("Created plan step with ID:", this.currentPlanStepId);
+        
+        if (planStep.type === "checkpoint") {
+          // Get fresh state and continue planning
+          const newState = await this.getCurrentState();
+          // TODO: Handle checkpoint logic
+          break;
+        }
+        
+        // Step 2: Execute browser actions for this plan step
+        const result = await this.executeBrowserActions(planStep.description, stepCounter);
+        if (!result.success) {
+          return result;
+        }
+
+        // Step 3: Evaluate this plan step
+        const evaluation = await this.evaluatePlanStep(planStep);
+        console.log("Plan step evaluation:", evaluation);
+        if (evaluation.evaluation !== "success") {
+          return { success: false, response: evaluation };
+        }
+        
+        stepCounter++;
+        if (stepCounter >= this.maxSteps) {
+          console.warn('Max steps reached');
+          return { success: false, error: 'Max steps reached' };
+        }
+      }
+      
+      return { success: true, response: "All plan steps completed successfully" };
+    } catch (error) {
+      console.error("Task execution failed:", error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  async executeBrowserActions(goal, stepCounter) {
+    try {
+      // Get current state
+      const state = await this.getCurrentState();
+      
+      // Get browser actions using existing executor logic
+      const response = await this.callAIService(goal, state, "executor");
+      console.log("Browser actions response:", response);
+      
+      if (response.success) {
+        const responseData = JSON.parse(response.response);
+        
+        console.log("Parsed response data:", responseData);
+        
+        const state = responseData.current_state;
+        // Send progress updates
+        if (stepCounter > 0) {
+          sendSidebarMessage(this.port, `Step ${stepCounter-1} Evaluation: ${state.evaluation_previous_goal}`);
+          sendSidebarMessage(this.port, `Step ${stepCounter}: ${state.next_goal}, actions: ${responseData.actions.length}`);
+        } else {
+          sendSidebarMessage(this.port, `Task started: ${goal}`);
+        }
+        
+        // Check for done action first
+        const doneAction = responseData.actions.find(action => action.action === 'done');
+        if (doneAction) {
+          sendSidebarMessage(this.port, `Task completed: ${doneAction.description}`);
+          return { success: true, response, isDone: true };
+        }
+        
+        // Execute actions sequentially with proper waiting
+        for (const actionData of responseData.actions) {
+          sendSidebarMessage(
+            this.port,
+            `Action ${responseData.actions.indexOf(actionData)+1}/${responseData.actions.length}: ${actionData.description}`
+          );
+          
+          try {
+            await this.actionHandler.handleAction(actionData);
+          } catch (error) {
+            console.error('Action failed:', error);
+            throw error;
+          }
+          
+          // Wait for stability
+          await waitForPageLoad(this.tabId);
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        
+        return { success: true, response };
+      }
+      
+      return { success: false, error: "Failed to get valid response from AI service" };
+    } catch (error) {
+      console.error('Error executing browser actions:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  async planTask(prompt) {
+    // Get current state
+    const state = await this.getCurrentState();
+    
+    // Send to AI service with planner prompt
+    const response = await this.callAIService(prompt, state, "planner");
+    return JSON.parse(response.response);
+  }
+
+  async evaluatePlanStep(planStep) {
+    // Get fresh state
+    const state = await this.getCurrentState();
+    
+    // Format the input according to the example format using plan step details
+    const formattedInput = `<interactive-elements>${state.elements}</interactive-elements>
+<task>${planStep.description}</task>
+<success-criteria>
+${planStep.success_criteria}
+</success-criteria>`;
+    
+    // Send to AI service with evaluator prompt
+    const response = await this.callAIService(formattedInput, state, "evaluator");
+    return JSON.parse(response.response);
+  }
+
+  async getCurrentState() {
+    const stringifiedInteractiveElements = await getInteractiveElements(this.tabId);
+    const screenshotUrl = await this.screenshotManager.captureScreenshot(this.tabId);
+    await this.screenshotManager.sendDebugScreenshot(this.tabId, this.port, screenshotUrl);
+    
+    return {
+      elements: stringifiedInteractiveElements,
+      screenshot: screenshotUrl
+    };
+  }
+
+  async callAIService(prompt, state, promptType) {
+    // Call AI service with appropriate prompt based on type
+    return await sendPromptAndScreenshotToServer(
+      prompt,
+      state.screenshot,
+      state.elements,
+      promptType,
+      this.currentTaskId,
+      this.currentPlanStepId
+    );
   }
 }
 
