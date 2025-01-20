@@ -1114,9 +1114,13 @@ class TaskExecutor {
       this.currentTaskId = await conversationStorage.createTask(prompt);
       console.log("Created task with ID:", this.currentTaskId);
       
+      sendSidebarMessage(this.port, `🎯 Starting new task: ${prompt}`);
+      
       // Step 1: Planning - Get high-level plan
+      sendSidebarMessage(this.port, `🤔 Planning task execution...`);
       const plan = await this.planTask(prompt);
       console.log("Generated plan:", plan);
+      sendSidebarMessage(this.port, `📋 Generated ${plan.action_plan.length} step plan`);
       
       // Execute the plan
       for (const planStep of plan.action_plan) {
@@ -1129,6 +1133,7 @@ class TaskExecutor {
         console.log("Created plan step with ID:", this.currentPlanStepId);
         
         if (planStep.type === "checkpoint") {
+          sendSidebarMessage(this.port, `⚡ Checkpoint reached: ${planStep.description}`);
           // Get fresh state and continue planning
           const newState = await this.getCurrentState();
           // TODO: Handle checkpoint logic
@@ -1138,26 +1143,32 @@ class TaskExecutor {
         // Step 2: Execute browser actions for this plan step
         const result = await this.executeBrowserActions(planStep.description, stepCounter);
         if (!result.success) {
+          sendSidebarMessage(this.port, `❌ Failed to execute step: ${result.error || 'Unknown error'}`);
           return result;
         }
 
         // Step 3: Evaluate this plan step
+        sendSidebarMessage(this.port, `🔍 Evaluating step results...`);
         const evaluation = await this.evaluatePlanStep(planStep);
         console.log("Plan step evaluation:", evaluation);
         if (evaluation.evaluation !== "success") {
+          sendSidebarMessage(this.port, `⚠️ Step evaluation failed: ${evaluation.reason || 'Unknown reason'}`);
           return { success: false, response: evaluation };
         }
         
         stepCounter++;
         if (stepCounter >= this.maxSteps) {
           console.warn('Max steps reached');
+          sendSidebarMessage(this.port, `⚠️ Maximum steps (${this.maxSteps}) reached - stopping execution`);
           return { success: false, error: 'Max steps reached' };
         }
       }
       
+      sendSidebarMessage(this.port, `✅ Task completed successfully!`);
       return { success: true, response: "All plan steps completed successfully" };
     } catch (error) {
       console.error("Task execution failed:", error);
+      sendSidebarMessage(this.port, `❌ Task failed: ${error.message}`);
       return {
         success: false,
         error: error.message
@@ -1171,6 +1182,7 @@ class TaskExecutor {
       const state = await this.getCurrentState();
       
       // Get browser actions using existing executor logic
+      sendSidebarMessage(this.port, `🤖 Planning browser actions...`);
       const response = await this.callAIService(goal, state, "executor");
       console.log("Browser actions response:", response);
       
@@ -1182,30 +1194,33 @@ class TaskExecutor {
         const state = responseData.current_state;
         // Send progress updates
         if (stepCounter > 0) {
-          sendSidebarMessage(this.port, `Step ${stepCounter-1} Evaluation: ${state.evaluation_previous_goal}`);
-          sendSidebarMessage(this.port, `Step ${stepCounter}: ${state.next_goal}, actions: ${responseData.actions.length}`);
+          sendSidebarMessage(this.port, `📝 Previous step: ${state.evaluation_previous_goal}`);
+          sendSidebarMessage(this.port, `🔄 Step ${stepCounter}: ${state.next_goal}`);
+          sendSidebarMessage(this.port, `⚙️ Planned actions: ${responseData.actions.length}`);
         } else {
-          sendSidebarMessage(this.port, `Task started: ${goal}`);
+          sendSidebarMessage(this.port, `🎬 Starting execution: ${goal}`);
         }
         
         // Check for done action first
         const doneAction = responseData.actions.find(action => action.action === 'done');
         if (doneAction) {
-          sendSidebarMessage(this.port, `Task completed: ${doneAction.description}`);
+          sendSidebarMessage(this.port, `🏁 Action completed: ${doneAction.description}`);
           return { success: true, response, isDone: true };
         }
         
         // Execute actions sequentially with proper waiting
         for (const actionData of responseData.actions) {
+          const actionNumber = responseData.actions.indexOf(actionData) + 1;
           sendSidebarMessage(
             this.port,
-            `Action ${responseData.actions.indexOf(actionData)+1}/${responseData.actions.length}: ${actionData.description}`
+            `🔨 Action ${actionNumber}/${responseData.actions.length}: ${actionData.description}`
           );
           
           try {
             await this.actionHandler.handleAction(actionData);
           } catch (error) {
             console.error('Action failed:', error);
+            sendSidebarMessage(this.port, `❌ Action failed: ${error.message}`);
             throw error;
           }
           
@@ -1217,9 +1232,11 @@ class TaskExecutor {
         return { success: true, response };
       }
       
+      sendSidebarMessage(this.port, `❌ Failed to get valid response from AI service`);
       return { success: false, error: "Failed to get valid response from AI service" };
     } catch (error) {
       console.error('Error executing browser actions:', error);
+      sendSidebarMessage(this.port, `❌ Error: ${error.message}`);
       return { success: false, error: error.message };
     }
   }
