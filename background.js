@@ -614,7 +614,7 @@ async function sendToOpenAI() {
   const { openai_api_key, openai_model, system_prompt } =
     await chrome.storage.local.get({
       openai_api_key: "",
-      openai_model: "gpt-4o-min",
+      openai_model: "gpt-4o-mini",
       system_prompt: "",
     });
 
