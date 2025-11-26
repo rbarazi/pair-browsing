@@ -45,6 +45,7 @@ A Chrome extension that provides an AI-powered assistant to help you navigate an
 
 ### For Google Gemini:
 - Enter your Gemini API key, or leave it blank and enable "Use Google account from Chrome" to authorize with your signed-in profile
+- If you enable Google account access, configure `manifest.json` with your Chrome extension OAuth2 client ID and include the `https://www.googleapis.com/auth/generative.language` scope
 - Optionally customize the model (default: gemini-2.0-flash-exp)
 
 ## Usage

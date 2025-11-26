@@ -40,5 +40,9 @@
     "resources": ["storage.js"],
     "matches": ["<all_urls>"]
   }],
+  "oauth2": {
+    "client_id": "YOUR_GEMINI_OAUTH_CLIENT_ID.apps.googleusercontent.com",
+    "scopes": ["https://www.googleapis.com/auth/generative.language"]
+  },
   "options_page": "options.html"
 }

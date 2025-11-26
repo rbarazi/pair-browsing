@@ -845,6 +845,9 @@ async function sendToGemini() {
     throw new Error("Gemini API key not set. Provide a key or enable Google account access in the options page.");
   }
 
+  const { oauth2 } = chrome.runtime.getManifest?.() ?? {};
+  const geminiScope = "https://www.googleapis.com/auth/generative.language";
+
   const getGeminiAuthHeaders = async () => {
     if (gemini_api_key) {
       return {
@@ -854,20 +857,26 @@ async function sendToGemini() {
     }
 
     if (gemini_use_identity && chrome.identity?.getAuthToken) {
+      if (!oauth2?.client_id || !oauth2?.scopes?.includes(geminiScope)) {
+        throw new Error("Gemini Google account access requires an OAuth2 client ID and generative language scope in the manifest.");
+      }
+
       const requestToken = (interactive) => new Promise((resolve, reject) => {
         chrome.identity.getAuthToken(
           {
             interactive,
-            scopes: ["https://www.googleapis.com/auth/generative.language"],
+            scopes: [geminiScope],
           },
           (authToken) => {
             if (chrome.runtime.lastError || !authToken) {
-              reject(
-                new Error(
-                  chrome.runtime.lastError?.message ||
-                    "Unable to authorize Gemini with the current Chrome profile"
-                )
-              );
+              const identityError = chrome.runtime.lastError?.message;
+              const formattedError =
+                identityError?.includes("OAuth2 not yet configured")
+                  ? "Chrome OAuth2 is not configured for Gemini. Add your OAuth client ID and scope in manifest.json."
+                  : identityError ||
+                    "Unable to authorize Gemini with the current Chrome profile";
+
+              reject(new Error(formattedError));
               return;
             }
             resolve(authToken);
