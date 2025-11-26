@@ -103,6 +103,15 @@
         <label for="geminiModel">Model Name:</label>
         <input type="text" id="geminiModel" placeholder="Enter model name (e.g., gemini-2.0-flash-exp)">
       </div>
+      <div class="form-group">
+        <label>
+          <input type="checkbox" id="geminiUseIdentity">
+          Use Google account from Chrome (requires sign in)
+        </label>
+        <p class="info-text" style="color: #666; font-size: 0.9em; margin-top: 6px;">
+          If no API key is provided, the extension will request permission to call Gemini with your signed-in Chrome account.
+        </p>
+      </div>
     </div>
 
     <div id="ollama-section" class="provider-section">

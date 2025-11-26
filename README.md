@@ -44,7 +44,7 @@ A Chrome extension that provides an AI-powered assistant to help you navigate an
 - Optionally customize the model (default: gpt-4o-mini)
 
 ### For Google Gemini:
-- Enter your Gemini API key
+- Enter your Gemini API key, or leave it blank and enable "Use Google account from Chrome" to authorize with your signed-in profile
 - Optionally customize the model (default: gemini-2.0-flash-exp)
 
 ## Usage

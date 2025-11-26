@@ -10,7 +10,8 @@
     "scripting",
     "sidePanel",
     "unlimitedStorage",
-    "windows"
+    "windows",
+    "identity"
   ],
   "host_permissions": [
     "<all_urls>"
