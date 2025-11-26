@@ -5,6 +5,7 @@ const DEFAULT_OPTIONS = {
   openai_model: "gpt-4o-mini",
   gemini_api_key: "",
   gemini_model: "gemini-2.0-flash-exp",
+  gemini_use_identity: false,
   ollama_model: "llama3.2-vision",
   system_prompt: `You are a precise browser automation agent that interacts with websites through structured commands. Your role is to:
 1. Analyze the provided webpage screenshot and elements and structure
@@ -132,6 +133,7 @@ function saveOptions() {
   const openaiModel = document.getElementById('openaiModel').value || DEFAULT_OPTIONS.openai_model;
   const geminiKey = document.getElementById('geminiKey').value || DEFAULT_OPTIONS.gemini_api_key;
   const geminiModel = document.getElementById('geminiModel').value || DEFAULT_OPTIONS.gemini_model;
+  const geminiUseIdentity = document.getElementById('geminiUseIdentity').checked;
   const ollamaModel = document.getElementById('ollamaModel').value || DEFAULT_OPTIONS.ollama_model;
   const systemPrompt = document.getElementById('systemPrompt').value || DEFAULT_OPTIONS.system_prompt;
   const debugMode = document.getElementById('debugMode').checked;
@@ -153,6 +155,7 @@ function saveOptions() {
       openai_model: openaiModel,
       gemini_api_key: geminiKey,
       gemini_model: geminiModel,
+      gemini_use_identity: geminiUseIdentity,
       ollama_model: ollamaModel,
       system_prompt: systemPrompt,
       debug_mode: debugMode,
@@ -180,6 +183,7 @@ function restoreOptions() {
     document.getElementById("openaiModel").value = items.openai_model;
     document.getElementById("geminiKey").value = items.gemini_api_key;
     document.getElementById("geminiModel").value = items.gemini_model;
+    document.getElementById("geminiUseIdentity").checked = items.gemini_use_identity;
     document.getElementById("ollamaModel").value = items.ollama_model;
     document.getElementById("systemPrompt").value = items.system_prompt;
     document.getElementById("debugMode").checked = items.debug_mode;
@@ -197,6 +201,16 @@ function updateVisibility() {
   document.getElementById('ollama-section').style.display = provider === 'ollama' ? 'block' : 'none';
 }
 
+// Provide isolated hooks for tests
+if (typeof globalThis !== 'undefined') {
+  globalThis.__OPTIONS_TESTING__ = {
+    DEFAULT_OPTIONS,
+    restoreOptions,
+    saveOptions,
+    updateVisibility,
+  };
+}
+
 document.addEventListener('DOMContentLoaded', restoreOptions);
 document.getElementById('save').addEventListener('click', saveOptions);
-document.getElementById('provider').addEventListener('change', updateVisibility); 
+document.getElementById('provider').addEventListener('change', updateVisibility);

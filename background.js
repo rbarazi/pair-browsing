@@ -44,7 +44,7 @@ async function updateHistory(newEntry) {
 // Reset session state
 async function resetSession(port, tabId) {
   // Clear conversation history
-  clearAIHistory();
+  await clearAIHistory();
   
   // Reinitialize cursor
   if (tabId) {
@@ -414,7 +414,7 @@ chrome.runtime.onConnect.addListener((port) => {
           message.prompt,
           tab.id,
           port,
-          []
+          0
         );
         port.postMessage({
           type: "AI_RESPONSE",
@@ -494,11 +494,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 // Function to send prompt + screenshot to AI provider
 async function sendPromptAndScreenshotToServer(prompt, base64Screenshot, stringifiedInteractiveElements = null) {
   console.log('Starting AI service request with prompt:', prompt);
-  
+
   // Get provider and settings from storage
   const { provider } = await chrome.storage.local.get({ provider: 'openai' });
 
-  updateHistory({ role: 'user', content: prompt, elements: stringifiedInteractiveElements, screenshot: base64Screenshot });
+  await updateHistory({
+    role: 'user',
+    content: prompt,
+    elements: stringifiedInteractiveElements,
+    screenshot: base64Screenshot,
+  });
 
   let response;
   try {
@@ -608,6 +613,31 @@ const BROWSER_AUTOMATION_SCHEMA = {
   required: ["current_state", "actions"],
 };
 
+function getLastHistoryEntry(aiHistory) {
+  const lastEntry = aiHistory.at(-1);
+  if (!lastEntry) {
+    throw new Error('Conversation history is empty. Unable to build AI request.');
+  }
+  return lastEntry;
+}
+
+function ensureLastMessageHasScreenshot(lastMessage) {
+  if (!lastMessage?.screenshot) {
+    throw new Error('Latest history entry is missing a screenshot for provider request.');
+  }
+}
+
+async function getProviderReadyHistory() {
+  const aiHistory = await conversationStorage.getAllHistory();
+  const lastMessage = getLastHistoryEntry(aiHistory);
+  ensureLastMessageHasScreenshot(lastMessage);
+
+  return {
+    lastMessage,
+    previousMessages: aiHistory.slice(0, -1),
+  };
+}
+
 // Update the OpenAI schema
 async function sendToOpenAI() {
   // Get provider and settings from storage
@@ -625,20 +655,18 @@ async function sendToOpenAI() {
     );
   }
 
-  const aiHistory = await conversationStorage.getAllHistory();
-  // get the last message from the history
-  const lastMessage = aiHistory[aiHistory.length - 1];
+  const { lastMessage, previousMessages } = await getProviderReadyHistory();
   // loop through the history messages except for the last one and add them to the messages array
-  let messages = aiHistory.slice(0, -1).map((message) => {
+  let messages = previousMessages.map((message) => {
     if (message.role === "user") {
       return {
         role: "user",
-        parts: [{ text: message.content }],
+        content: message.content,
       };
     } else if (message.role === "assistant") {
       return {
-        role: "model",
-        parts: [{ text: message.content }],
+        role: "assistant",
+        content: message.content,
       };
     }
     return message;
@@ -652,7 +680,7 @@ async function sendToOpenAI() {
         type: "text",
         text: `
 <task>${lastMessage.content}</task>
-<interactive_elements>${lastMessage.elements}</interactive_elements>
+<interactive_elements>${lastMessage.elements || ''}</interactive_elements>
 `,
       },
       { type: "image_url", image_url: { url: lastMessage.screenshot } },
@@ -719,11 +747,9 @@ async function sendToOllama() {
 
   console.log("Preparing Ollama request");
 
-  const aiHistory = await conversationStorage.getAllHistory();
-  // get the last message from the history
-  const lastMessage = aiHistory[aiHistory.length - 1];
+  const { lastMessage, previousMessages } = await getProviderReadyHistory();
   // loop through the history messages except for the last one and add them to the messages array
-  let messages = aiHistory.slice(0, -1).map((message) => {
+  let messages = previousMessages.map((message) => {
     if (message.role === "user") {
       return {
         role: "user",
@@ -805,30 +831,86 @@ async function sendToGemini() {
   const {
     gemini_api_key,
     gemini_model,
+    gemini_use_identity,
     system_prompt,
   } = await chrome.storage.local.get({
     gemini_api_key: "",
     gemini_model: "gemini-2.0-flash-exp",
+    gemini_use_identity: false,
     system_prompt: "",
   });
 
   console.log('Preparing Gemini request');
-  if (!gemini_api_key) {
-    throw new Error("Gemini API key not set. Please set your API key in the extension options.");
+  if (!gemini_api_key && !gemini_use_identity) {
+    throw new Error("Gemini API key not set. Provide a key or enable Google account access in the options page.");
   }
+
+  const { oauth2 } = chrome.runtime.getManifest?.() ?? {};
+  const geminiScope = "https://www.googleapis.com/auth/generative.language";
+
+  const getGeminiAuthHeaders = async () => {
+    if (gemini_api_key) {
+      return {
+        "Content-Type": "application/json",
+        "x-goog-api-key": gemini_api_key,
+      };
+    }
+
+    if (gemini_use_identity && chrome.identity?.getAuthToken) {
+      if (!oauth2?.client_id || !oauth2?.scopes?.includes(geminiScope)) {
+        throw new Error("Gemini Google account access requires an OAuth2 client ID and generative language scope in the manifest.");
+      }
+
+      const requestToken = (interactive) => new Promise((resolve, reject) => {
+        chrome.identity.getAuthToken(
+          {
+            interactive,
+            scopes: [geminiScope],
+          },
+          (authToken) => {
+            if (chrome.runtime.lastError || !authToken) {
+              const identityError = chrome.runtime.lastError?.message;
+              const formattedError =
+                identityError?.includes("OAuth2 not yet configured")
+                  ? "Chrome OAuth2 is not configured for Gemini. Add your OAuth client ID and scope in manifest.json."
+                  : identityError ||
+                    "Unable to authorize Gemini with the current Chrome profile";
+
+              reject(new Error(formattedError));
+              return;
+            }
+            resolve(authToken);
+          }
+        );
+      });
+
+      let token;
+      try {
+        token = await requestToken(false);
+      } catch (silentError) {
+        console.warn("Silent Gemini authorization failed, requesting interactive token", silentError);
+        token = await requestToken(true);
+      }
+
+      return {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      };
+    }
+
+    throw new Error("Gemini authorization not configured. Add an API key or enable Google account access.");
+  };
 
   const maxRetries = 3;
   let retryCount = 0;
 
   while (retryCount < maxRetries) {
     try {
-      const GEMINI_API_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${gemini_model}:generateContent?key=${gemini_api_key}`;
+      const GEMINI_API_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${gemini_model}:generateContent`;
 
-      const aiHistory = await conversationStorage.getAllHistory();
-      // get the last message from the history
-      const lastMessage = aiHistory[aiHistory.length - 1];
+      const { lastMessage, previousMessages } = await getProviderReadyHistory();
       // loop through the history messages except for the last one and add them to the messages array
-      let messages = aiHistory.slice(0, -1).map(message => {
+      let messages = previousMessages.map(message => {
         if (message.role === "user") {
           return {
             role: "user",
@@ -851,7 +933,7 @@ async function sendToGemini() {
             text: `
 Your task is: ${lastMessage.content}
 Interactive elements:
-${lastMessage.elements}
+${lastMessage.elements || ''}
 `,
           },
           {
@@ -868,12 +950,7 @@ ${lastMessage.elements}
 
       // Create the request body
       const requestBody = {
-        system_instruction: {
-          parts:{
-            text: system_prompt
-          }
-        },
-        contents: [messages],
+        contents: messages,
         generationConfig: {
           temperature: 0.4,
           topK: 40,
@@ -884,12 +961,16 @@ ${lastMessage.elements}
         }
       };
 
+      if (system_prompt) {
+        requestBody.system_instruction = {
+          parts: [{ text: system_prompt }],
+        };
+      }
+
       console.log('Sending request to Gemini API');
-      const response = await fetch(GEMINI_API_ENDPOINT, {
+      const response = await fetch(GEMINI_API_ENDPOINT + (gemini_api_key ? `?key=${gemini_api_key}` : ""), {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
+        headers: await getGeminiAuthHeaders(),
         body: JSON.stringify(requestBody)
       });
 
@@ -1102,5 +1183,17 @@ async function initializeCursorWithRetry(tabId, maxAttempts = 3) {
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
   }
+}
+
+// Expose focused helpers for tests without affecting runtime behavior
+if (typeof globalThis !== 'undefined') {
+  globalThis.__BACKGROUND_TESTING__ = {
+    ensureLastMessageHasScreenshot,
+    getProviderReadyHistory,
+    getLastHistoryEntry,
+    sendToOpenAI,
+    sendToOllama,
+    sendToGemini,
+  };
 }
 
